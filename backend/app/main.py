@@ -6,7 +6,7 @@ import traceback
 import json
 
 from app.llm import EpitechLLMService
-from backend.app.scraper import scrape_url
+from backend.app.tools.scraper import scrape_url
 from app.mcp_sim import MCPSimulator
 
 app = FastAPI(title="Chatbot IA Local API")

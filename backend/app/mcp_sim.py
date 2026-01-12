@@ -1,7 +1,7 @@
 # backend/app/mcp_sim.py
 import re
 from typing import Optional, Dict, Any
-from fuel_scraper import FuelPriceScraper
+from backend.app.tools.fuel_scraper import FuelPriceScraper
 
 class MCPSimulator:
     """
