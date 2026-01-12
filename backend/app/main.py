@@ -6,7 +6,7 @@ import traceback
 import json
 
 from app.llm import EpitechLLMService
-from backend.app.tools.scraper import scrape_url
+from app.tools.scraper import scrape_url
 from app.mcp_sim import MCPSimulator
 
 app = FastAPI(title="Chatbot IA Local API")
@@ -33,67 +33,62 @@ class FuelSearchRequest(BaseModel):
     limit: int = 5
 
 def format_fuel_results(mcp_result: dict) -> str:
-    """Formate les résultats des prix de carburant pour le LLM"""
-    if not mcp_result.get('success'):
-        return f"❌ Erreur: {mcp_result.get('error', 'Erreur inconnue')}"
-    
-    tool = mcp_result.get('tool', 'search_fuel_prices')
-    result = mcp_result.get('result', {})
-    
+    """Formate les résultats MCP carburant pour le LLM"""
+
+    tool = mcp_result.get("tool")
+    data = mcp_result.get("result", {})
+
+    if not data.get("success"):
+        return f"❌ Erreur: {data.get('error', 'Erreur inconnue')}"
+
     if tool == "get_cheapest_station":
-        stations = result.get('cheapest_stations', [])
-        location = result.get('location', 'inconnue')
-        fuel_type = result.get('fuel_type', 'Gazole')
-        
+        stations = data.get("cheapest_stations", [])
+        location = data.get("location", "inconnue")
+        fuel_type = data.get("fuel_type", "Gazole")
+
         if not stations:
             return f"Aucune station trouvée pour {location}"
-        
-        formatted = f"🚗 Top {len(stations)} stations les moins chères pour {fuel_type} à {location}:\n\n"
-        
-        for i, station in enumerate(stations, 1):
-            formatted += f"{i}. {station['adresse']}, {station['ville']} ({station['cp']})\n"
-            formatted += f"   💰 Prix: {station['price']:.3f} €/L\n"
-            formatted += f"   🕒 Mis à jour: {station['updated']}\n\n"
-        
-        return formatted
-    
-    elif tool == "search_fuel_prices":
-        stations = result.get('results', [])
-        location = result.get('location', 'inconnue')
-        fuel_type = result.get('fuel_type', 'Gazole')
-        count = result.get('count', 0)
-        
+
+        out = f"🚗 Stations les moins chères pour {fuel_type} à {location}:\n\n"
+        for i, s in enumerate(stations, 1):
+            out += (
+                f"{i}. {s['adresse']}, {s['ville']} ({s['cp']})\n"
+                f"   💰 {s['price']:.3f} €/L\n"
+                f"   🕒 {s['updated']}\n\n"
+            )
+        return out
+
+    if tool == "search_fuel_prices":
+        stations = data.get("results", [])
+        location = data.get("location", "inconnue")
+        fuel_type = data.get("fuel_type", "Gazole")
+        count = data.get("count", 0)
+
         if not stations:
             return f"Aucune station trouvée pour {location}"
-        
-        formatted = f"🔍 {count} stations trouvées pour {fuel_type} à {location}:\n\n"
-        
-        for i, station in enumerate(stations[:5], 1):  # Top 5
-            formatted += f"{i}. {station['adresse']}, {station['ville']}\n"
-            formatted += f"   💰 {station['price']:.3f} €/L\n\n"
-        
-        if count > 5:
-            formatted += f"... et {count - 5} autres stations\n"
-        
-        return formatted
-    
-    elif tool == "get_fuel_stats":
-        stats = result.get('stats', {})
-        if 'error' in stats:
-            return f"❌ {stats['error']}"
-        
-        gazole = stats.get('gazole', {})
-        return f"""📊 Statistiques nationales ({stats.get('date', 'aujourd\'hui')}):
 
-Total de stations: {stats.get('total_stations', 0)}
+        out = f"⛽ {count} stations pour {fuel_type} à {location}:\n\n"
+        for i, s in enumerate(stations[:5], 1):
+            out += (
+                f"{i}. {s['adresse']}, {s['ville']} ({s['cp']})\n"
+                f"   💰 {s['price']:.3f} €/L\n\n"
+            )
+        return out
 
-Prix du Gazole:
-• Minimum: {gazole.get('min', 0):.3f} €/L
-• Maximum: {gazole.get('max', 0):.3f} €/L
-• Moyenne: {gazole.get('avg', 0):.3f} €/L
-"""
-    
-    return "Résultat traité"
+    if tool == "get_fuel_stats":
+        stats = data.get("stats", {})
+        gazole = stats.get("gazole", {})
+
+        return (
+            f"📊 Statistiques nationales ({stats.get('date')}):\n\n"
+            f"Stations: {stats.get('total_stations')}\n"
+            f"Gazole:\n"
+            f"• Min: {gazole.get('min'):.3f} €/L\n"
+            f"• Max: {gazole.get('max'):.3f} €/L\n"
+            f"• Moyenne: {gazole.get('avg'):.3f} €/L\n"
+        )
+
+    return "Données MCP reçues mais non formatées"
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
