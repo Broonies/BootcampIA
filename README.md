@@ -1,4 +1,4 @@
-Nouveau terminal poru Lancer le back :
+Nouveau terminal pour Lancer le back :
 cd backend
 python -m uvicorn app.main:app --reload
 
