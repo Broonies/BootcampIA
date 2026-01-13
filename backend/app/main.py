@@ -11,9 +11,10 @@ from app.mcp_sim import MCPSimulator
 
 app = FastAPI(title="Chatbot IA Local API")
 
+# --- MODIFICATION 1 : CORS permissifs pour le dev ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*"],  # Autorise toutes les origines (pratique pour le dev)
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -100,12 +101,21 @@ async def chat(request: ChatRequest):
         tool_used = mcp_result.get('tool')
         
         context = ""
+        raw_results = []  # Variable pour stocker les données JSON brutes
         
         # 2. Exécuter l'outil MCP si nécessaire
         if tool_used and tool_used != "scrape_website":
             print(f"🔧 Outil MCP détecté: {tool_used}")
             context = format_fuel_results(mcp_result)
             print(f"📊 Contexte généré: {context[:200]}...")
+
+            # --- MODIFICATION 2 : Extraction des données brutes pour le front ---
+            data_content = mcp_result.get("result", {})
+            if tool_used == "get_cheapest_station":
+                raw_results = data_content.get("cheapest_stations", [])
+            elif tool_used == "search_fuel_prices":
+                raw_results = data_content.get("results", [])
+            # --------------------------------------------------------------------
         
         # 3. Scraping classique si URL détectée
         elif tool_used == "scrape_website":
@@ -145,9 +155,11 @@ Instructions:
         
         print(f"✅ Réponse générée")
         
+        # --- MODIFICATION 3 : Renvoi des données brutes dans la réponse ---
         return {
             "response": response,
             "tool_used": tool_used,
+            "data": raw_results,  # On inclut les stations ici
             "scraped_data": context if context else None
         }
         

@@ -52,7 +52,7 @@ function createStationCard(station) {
   card.innerHTML = `
         <div class="station-header">
             <div class="station-name">${station.name}</div>
-            <div class="station-distance">${station.distance} km</div>
+            <div class="station-distance">${station.distance}</div>
         </div>
         <div class="fuel-prices">
             ${station.prices
@@ -72,21 +72,69 @@ function createStationCard(station) {
   return card;
 }
 
-// Placeholder pour l'intégration du backend
-// Remplacez le contenu de sendToBackend pour effectuer un `fetch()` vers votre API.
-// La fonction doit retourner une Promise qui résout une réponse structurée identique
-// à celle que la simulation renvoyait auparavant (ex : { type: 'stations', stations: [...] }).
-function sendToBackend(query) {
-  // TODO: implémentez ici l'appel réel au backend, par ex. :
-  // return fetch('/api/search', { method: 'POST', body: JSON.stringify({ query }) })
-  //   .then(r => r.json());
+// --- MODIFICATION MAJEURE : Fonction connectée au Backend ---
+async function sendToBackend(query) {
+  try {
+    // 1. Appel réel à ton API FastAPI
+    // Note : On suppose que ton backend tourne sur le port 8000
+    const response = await fetch("http://127.0.0.1:8000/api/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: query,
+        history: [], // Historique vide pour l'instant
+      }),
+    });
 
-  // Par défaut, renvoie une réponse informative pour indiquer que le backend
-  // n'est pas encore configuré. Cela permet au frontend de rester fonctionnel.
-  return Promise.resolve({
-    type: "text",
-    text: "Backend non configuré. Intégrez votre backend en remplaçant sendToBackend() par un fetch() vers votre API.",
-  });
+    if (!response.ok) {
+      throw new Error(`Erreur serveur: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    // 2. Traitement intelligent de la réponse
+    // Si le backend renvoie des données de stations (tableau non vide) dans 'data'
+    if (data.data && Array.isArray(data.data) && data.data.length > 0) {
+      
+      // On convertit le format du Python vers le format attendu par createStationCard
+      const formattedStations = data.data.map((station, index) => ({
+        name: `${station.adresse}, ${station.ville}`, // Nom de la station
+        distance: station.cp, // On affiche le CP à la place de la distance pour l'instant
+        best: index === 0,    // La première est la moins chère (tri backend)
+        prices: [
+          {
+            type: "Gazole", // Ou station.fuel_type si disponible dans 'data'
+            price: station.price.toFixed(3)
+          }
+        ]
+      }));
+
+      // On renvoie un objet type 'stations' pour que sendMessage affiche les cartes
+      return {
+        type: "stations", 
+        stations: formattedStations,
+        // On peut aussi afficher le texte de l'IA si on modifiait sendMessage, 
+        // mais ici le format attendu par ton code existant sépare stations ou texte.
+        // Pour bien faire, on pourrait afficher le texte PUIS les stations,
+        // mais restons simples pour l'instant : on renvoie les stations.
+      };
+    }
+
+    // 3. Cas par défaut : réponse textuelle simple de l'IA
+    return {
+      type: "text",
+      text: data.response,
+    };
+
+  } catch (error) {
+    console.error("Erreur API:", error);
+    return {
+      type: "text",
+      text: "❌ Désolé, je n'arrive pas à joindre le serveur. Vérifie que le backend (main.py) est bien lancé sur le port 8000.",
+    };
+  }
 }
 
 // Fonctions exposées utilisées par l'HTML
@@ -124,7 +172,7 @@ function sendMessage() {
   chat.appendChild(typing);
   scrollToBottom(chat);
 
-  // Appeler le backend (placeholder). sendToBackend renvoie une Promise.
+  // Appeler le backend
   sendToBackend(text)
     .then((res) => {
       // Retirer indicateur
@@ -140,18 +188,21 @@ function sendMessage() {
         return;
       }
 
+      // Si c'est un type 'stations' (notre nouvel objet retourné)
       if (res.type === "stations" || res.type === "prices") {
         const container = createMessageElement({
           role: "ai",
-          text: "Voici ce que j’ai trouvé :",
+          text: "Voici les stations les moins chères trouvées :",
         });
         const content = container.querySelector(".message-content");
-        content.innerHTML = "";
+        
+        // Création des cartes
         res.stations.forEach((st) => {
           const card = createStationCard(st);
           content.appendChild(card);
         });
         chat.appendChild(container);
+
       } else if (res.type === "single") {
         const aiMsg = createMessageElement({
           role: "ai",
@@ -159,6 +210,7 @@ function sendMessage() {
         });
         chat.appendChild(aiMsg);
       } else {
+        // Cas par défaut (texte simple)
         const aiMsg = createMessageElement({
           role: "ai",
           text: escapeHtml(res.text || String(res)),
@@ -182,6 +234,7 @@ function sendMessage() {
 
 // Utilitaires
 function escapeHtml(unsafe) {
+  if (!unsafe) return "";
   return unsafe
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
