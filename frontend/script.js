@@ -1,5 +1,28 @@
 // ia.js - Comportement minimal pour FuelBot
 // Définit : sendSuggestion(text), sendMessage(), handleKeyPress(event)
+let userLocation = null;
+
+function getUserLocation() {
+  if (!navigator.geolocation) {
+    console.warn("Geolocation non supportée");
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      userLocation = {
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude
+      };
+      console.log("📍 Position:", userLocation);
+    },
+    () => {
+      alert("Autorise la géolocalisation pour utiliser FuelBot");
+    }
+  );
+}
+
+getUserLocation();
 
 // Helpers DOM
 const $ = (s) => document.querySelector(s);
@@ -78,15 +101,14 @@ async function sendToBackend(query) {
     // 1. Appel réel à ton API FastAPI
     // Note : On suppose que ton backend tourne sur le port 8000
     const response = await fetch("http://127.0.0.1:8000/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: query,
-        history: [], // Historique vide pour l'instant
-      }),
-    });
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: query,
+      history: [],
+      location: userLocation
+    }),
+  });
 
     if (!response.ok) {
       throw new Error(`Erreur serveur: ${response.status}`);
@@ -105,12 +127,11 @@ async function sendToBackend(query) {
         best: index === 0,    // La première est la moins chère (tri backend)
         prices: [
           {
-            type: "Gazole", // Ou station.fuel_type si disponible dans 'data'
+            type: station.fuel_type, // Ou station.fuel_type si disponible dans 'data'
             price: station.price.toFixed(3)
           }
         ]
       }));
-
       // On renvoie un objet type 'stations' pour que sendMessage affiche les cartes
       return {
         type: "stations", 

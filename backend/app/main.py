@@ -91,82 +91,203 @@ def format_fuel_results(mcp_result: dict) -> str:
 
     return "Données MCP reçues mais non formatées"
 
+
+def format_traffic_results(mcp_result: dict) -> str:
+    """Formate les données de trafic Rennes pour le LLM"""
+
+    data = mcp_result.get("result", {})
+
+    if not data.get("success"):
+        return f"❌ Erreur trafic: {data.get('error', 'Erreur inconnue')}"
+
+    roads = data.get("roads", [])
+    summary = data.get("summary", "Données de trafic")
+    updated = data.get("updated", "maintenant")
+
+    if not roads:
+        return f"🟢 {summary} à Rennes (mis à jour à {updated})"
+
+    txt = f"🚦 État du trafic Rennes - {summary} ({updated}):\n\n"
+
+    # Regrouper par priorité pour meilleure lisibilité
+    critical = [r for r in roads if r.get("priority") == "critique"]
+    high = [r for r in roads if r.get("priority") == "haute"]
+    medium = [r for r in roads if r.get("priority") == "moyen"]
+    
+    def _fmt(street: str, lat: float | None, lon: float | None) -> str:
+        if lat is not None and lon is not None:
+            return f"{street} ({lat:.5f}, {lon:.5f})"
+        return street
+
+    if critical:
+        txt += "🚨 CRITIQUE:\n"
+        for r in critical:
+            txt += f"  • {_fmt(r.get('street', '?'), r.get('lat'), r.get('lon'))} - {r.get('status', '?')}\n"
+        txt += "\n"
+    
+    if high:
+        txt += "⚠️ PERTURBATIONS:\n"
+        for r in high:
+            txt += f"  • {_fmt(r.get('street', '?'), r.get('lat'), r.get('lon'))} - {r.get('status', '?')}\n"
+        txt += "\n"
+    
+    if medium:
+        txt += "📍 DENSE:\n"
+        for r in medium[:5]:
+            txt += f"  • {_fmt(r.get('street', '?'), r.get('lat'), r.get('lon'))} - {r.get('status', '?')}\n"
+        if len(medium) > 5:
+            txt += f"  ... et {len(medium)-5} autres zones denses\n"
+    
+    txt += f"\n💡 {len(roads)} axe(s) perturbé(s) actuellement"
+    return txt
+
+
+def format_parking_results(mcp_result: dict) -> str:
+    """Formate les données de parkings Rennes pour le LLM"""
+
+    data = mcp_result.get("result", {})
+
+    if not data.get("success"):
+        return f"❌ Erreur parkings: {data.get('error', 'Erreur inconnue')}"
+
+    parkings = data.get("parkings", [])
+    updated = data.get("updated", "maintenant")
+
+    if not parkings:
+        return f"⚠️ Aucune donnée de parking disponible (mis à jour à {updated})"
+
+    txt = f"🅿️ Parkings à Rennes ({updated}):\n\n"
+
+    # Afficher top 10 parkings avec le plus de places disponibles
+    for p in parkings[:10]:
+        txt += f"• {p['name']}\n"
+        txt += f"  {p['status']} - {p['available']}/{p['total']} places\n"
+        if p.get('location'):
+            txt += f"  📍 {p['location']}\n"
+        
+        # Afficher les tarifs si disponibles
+        if p.get('pricing'):
+            tarifs_str = ", ".join([f"{duree}: {prix}" for duree, prix in p['pricing'].items()])
+            txt += f"  💰 Tarifs: {tarifs_str}\n"
+        
+        txt += "\n"
+
+    txt += f"💡 {len(parkings)} parking(s) surveillés"
+    return txt
+
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     try:
         print(f"📨 Message reçu: {request.message}")
-        
-        # 1. Traiter avec MCP pour détecter l'intention
+
+        # 1. MCP – détection + exécution
         mcp_result = mcp.process_message(request.message)
-        tool_used = mcp_result.get('tool')
-        
+        tool_used = mcp_result.get("tool")
+
         context = ""
-        raw_results = []  # Variable pour stocker les données JSON brutes
-        
-        # 2. Exécuter l'outil MCP si nécessaire
-        if tool_used and tool_used != "scrape_website":
+        raw_results = None
+
+        # 🔒 Bloquer tout ce qui n’est pas mobilité
+        if not tool_used:
+            return {
+                "response": (
+                    "🚗 Je suis un assistant mobilité Rennes.\n\n"
+                    "Je peux t'aider pour :\n"
+                    "• prix des carburants\n"
+                    "• stations essence\n"
+                    "• parkings\n"
+                    "• trafic et itinéraires\n\n"
+                    "Pose-moi une question liée à tes déplacements."
+                ),
+                "tool_used": None,
+                "data": None
+            }
+
+        # 2. Outils MCP (fuel, traffic, etc.)
+        if tool_used != "scrape_website":
             print(f"🔧 Outil MCP détecté: {tool_used}")
-            context = format_fuel_results(mcp_result)
+
+            # Format texte pour le LLM
+            if tool_used == "get_traffic_status":
+                context = format_traffic_results(mcp_result)
+            elif tool_used == "get_parking_status":
+                context = format_parking_results(mcp_result)
+            else:
+                context = format_fuel_results(mcp_result)
+
+            # Extraction données brutes pour le frontend
+            data_content = mcp_result.get("result", {})
+
+            if data_content.get("success"):
+                if tool_used == "get_cheapest_station":
+                    raw_results = data_content.get("cheapest_stations", [])
+                elif tool_used == "search_fuel_prices":
+                    raw_results = data_content.get("results", [])
+
             print(f"📊 Contexte généré: {context[:200]}...")
 
-            # --- MODIFICATION 2 : Extraction des données brutes pour le front ---
-            data_content = mcp_result.get("result", {})
-            if tool_used == "get_cheapest_station":
-                raw_results = data_content.get("cheapest_stations", [])
-            elif tool_used == "search_fuel_prices":
-                raw_results = data_content.get("results", [])
-            # --------------------------------------------------------------------
-        
-        # 3. Scraping classique si URL détectée
-        elif tool_used == "scrape_website":
+        # 3. Scraping de page web si URL
+        else:
             import re
-            urls = re.findall(r'https?://[^\s]+', request.message)
+            urls = re.findall(r"https?://[^\s]+", request.message)
             if urls:
                 scraped = scrape_url(urls[0])
-                if scraped['success']:
-                    context = f"""Données scrapées de {urls[0]}:
-Titre: {scraped['title']}
-Contenu: {scraped['content'][:1500]}"""
-        
-        # 4. Construire le prompt pour le LLM
-        if context:
-            system_prompt = f"""Tu es un assistant spécialisé dans l'aide aux automobilistes pour trouver les meilleurs prix de carburant.
+                if scraped.get("success"):
+                    context = (
+                        f"Données scrapées de {urls[0]}:\n"
+                        f"Titre: {scraped.get('title')}\n"
+                        f"Contenu: {scraped.get('content')[:1500]}"
+                    )
 
-Données disponibles:
+        # 4. Prompt LLM verrouillé mobilité Rennes
+        if context:
+            system_prompt = f"""
+Tu es un assistant IA spécialisé exclusivement dans l'aide aux automobilistes sur Rennes Métropole.
+
+Tu n'as accès qu'aux données suivantes :
 {context}
 
-Instructions:
-- Réponds de manière claire et concise
-- Mets en avant les informations les plus pertinentes
-- Utilise des émojis pour rendre la réponse plus lisible
-- Si c'est une question sur les prix, base-toi UNIQUEMENT sur les données fournies"""
-            
-            full_message = f"{system_prompt}\n\nQuestion de l'utilisateur: {request.message}"
+Tu n'as PAS le droit de :
+- donner des conseils généraux
+- répondre à des questions hors mobilité
+- inventer des prix, itinéraires ou parkings
+- utiliser des connaissances externes
+
+Si l'utilisateur demande autre chose que :
+- carburant
+- parkings
+- trafic
+- itinéraires
+tu dois répondre :
+"Je suis un assistant mobilité Rennes."
+"""
+            full_message = f"{system_prompt}\n\nQuestion: {request.message}"
         else:
             full_message = request.message
-        
-        # 5. Appeler le LLM
+
+        # 5. Appel LLM
         print("🤖 Appel au LLM...")
         response = llm_service.chat(
             message=full_message,
             context="",
             history=request.history
         )
-        
-        print(f"✅ Réponse générée")
-        
-        # --- MODIFICATION 3 : Renvoi des données brutes dans la réponse ---
+        print("✅ Réponse générée")
+
+        # 6. Réponse API
         return {
             "response": response,
             "tool_used": tool_used,
-            "data": raw_results,  # On inclut les stations ici
-            "scraped_data": context if context else None
+            "data": raw_results,
+            "context": context
         }
-        
+
     except Exception as e:
         print(f"❌ ERREUR: {str(e)}")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/health")
 async def health():
@@ -208,5 +329,23 @@ async def refresh_fuel_data():
     try:
         mcp.fuel_scraper.fetch_daily_prices(force_refresh=True)
         return {"status": "success", "message": "Données rafraîchies"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/traffic")
+async def get_traffic():
+    """Endpoint dédié pour l'état du trafic"""
+    try:
+        result = mcp.execute_tool("get_traffic_status", {})
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/parkings")
+async def get_parkings():
+    """Endpoint dédié pour la disponibilité des parkings"""
+    try:
+        result = mcp.execute_tool("get_parking_status", {})
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
