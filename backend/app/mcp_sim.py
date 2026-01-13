@@ -135,6 +135,18 @@ class MCPSimulator:
         if 'code_postal' not in params and 'ville' not in params:
             params['code_postal'] = '35'
             params['ville'] = 'Rennes'
+
+        # Extraction d'une rue potentielle pour le trafic
+        if tool_name == 'get_traffic_status':
+            street_patterns = [
+                r"(?:rue|avenue|av\.?|boulevard|bd\.?|quai|route|chemin|allee|impasse|place)\s+([A-Za-zÀ-ÿ'\- ]{3,})",
+                r'"([^"]{3,})"',
+            ]
+            for pat in street_patterns:
+                m = re.search(pat, message, flags=re.IGNORECASE)
+                if m:
+                    params['street_query'] = m.group(1).strip()
+                    break
         
         # Limite de résultats
         if any(word in message_lower for word in ['top 3', '3 premiers', 'trois']):
@@ -237,7 +249,7 @@ class MCPSimulator:
         Retourne l'état du trafic pour Rennes Métropole
         Délègue au TrafficScraper pour le parsing des données
         """
-        return self.traffic_scraper.get_traffic_status()
+        return self.traffic_scraper.get_traffic_status(params.get("street_query"))
     
     def _get_parking_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -245,14 +257,6 @@ class MCPSimulator:
         Délègue au ParkingScraper
         """
         return self.parking_scraper.get_parking_status()
-
-    def _get_traffic_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Retourne l'état du trafic pour Rennes Métropole
-        Délègue au TrafficScraper pour le parsing des données
-        """
-        return self.traffic_scraper.get_traffic_status()
-        
 
 # Tests
 if __name__ == "__main__":
