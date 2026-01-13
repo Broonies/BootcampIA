@@ -9,6 +9,13 @@ import os
 import zipfile
 import io
 
+# Codes postaux Rennes Métropole
+RENNES_METRO_POSTAL_CODES = [
+    "35000", "35200", "35700",  # Rennes
+    "35510", "35170", "35650",  # Cesson-Sévigné, Bruz, Le Rheu
+    "35850", "35235", "35590",  # Betton, Thorigné-Fouillard, Saint-Gilles
+]
+
 def safe_float(value: str, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -22,10 +29,11 @@ class FuelPriceScraper:
     Cache local optionnel
     """
 
-    def __init__(self, cache_dir: str = "cache"):
+    def __init__(self, cache_dir: str = "cache", restrict_to_rennes: bool = True):
         self.base_url = "https://donnees.roulez-eco.fr/opendata/jour"
         self.cache_dir = cache_dir
         self.cache_file = os.path.join(cache_dir, "fuel_prices_cache.json")
+        self.restrict_to_rennes = restrict_to_rennes
 
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -43,12 +51,12 @@ class FuelPriceScraper:
 
             timestamp = datetime.fromisoformat(cache["timestamp"])
             if datetime.now() - timestamp < timedelta(hours=24):
-                print(f"📦 Cache valide ({timestamp})")
+                print(f"[Cache] Cache valide ({timestamp})")
                 return cache["data"]
 
             return None
         except Exception as e:
-            print("⚠️ Erreur lecture cache:", e)
+            print("[Warning] Erreur lecture cache:", e)
             return None
 
     def _save_cache(self, data: Dict):
@@ -62,7 +70,7 @@ class FuelPriceScraper:
                 ensure_ascii=False,
                 indent=2,
             )
-        print(f"💾 Cache sauvegardé ({data['total_stations']} stations)")
+        print(f"[Cache] Cache sauvegarde ({data['total_stations']} stations)")
 
     # ------------------------------------------------------------------
     # FETCH
@@ -74,7 +82,7 @@ class FuelPriceScraper:
             if cached:
                 return cached
 
-        print("🌐 Téléchargement des prix carburants...")
+        print("[Download] Telechargement des prix carburants...")
 
         try:
             response = requests.get(self.base_url, timeout=30)
@@ -136,15 +144,15 @@ class FuelPriceScraper:
             }
 
             self._save_cache(result)
-            print(f"✅ {len(stations)} stations chargées")
+            print(f"[Success] {len(stations)} stations chargees")
 
             return result
 
         except Exception as e:
-            print("❌ Erreur récupération carburants:", e)
+            print("[Error] Erreur recuperation carburants:", e)
             cached = self._get_cache()
             if cached:
-                print("⚠️ Utilisation du cache existant")
+                print("[Warning] Utilisation du cache existant")
                 return cached
             raise
 
@@ -156,10 +164,20 @@ class FuelPriceScraper:
         self, ville: str, fuel_type: str = "Gazole"
     ) -> List[Dict]:
         data = self.fetch_daily_prices()
+        ville_original = ville
         ville = ville.lower()
+
+        # 🔒 RESTRICTION Ille-et-Vilaine (35) si activée
+        if self.restrict_to_rennes and not ville.startswith("35") and "rennes" not in ville:
+            print(f"[Warning] Restriction Ille-et-Vilaine : recherche limitee au departement 35 (demande: {ville_original})")
+            ville = "rennes"
 
         results = []
         for s in data["stations"]:
+            # Filtrer par département 35 si restriction
+            if self.restrict_to_rennes and not s["cp"].startswith("35"):
+                continue
+            
             if ville in s["ville"].lower():
                 if fuel_type in s["prices"]:
                     results.append(
@@ -167,6 +185,7 @@ class FuelPriceScraper:
                             "ville": s["ville"],
                             "adresse": s["adresse"],
                             "cp": s["cp"],
+                            "fuel_type": fuel_type,
                             "price": s["prices"][fuel_type]["price"],
                             "updated": s["prices"][fuel_type]["updated"],
                         }
@@ -180,8 +199,19 @@ class FuelPriceScraper:
     ) -> List[Dict]:
         data = self.fetch_daily_prices()
 
+        # 🔒 RESTRICTION Ille-et-Vilaine (35) si activée
+        if self.restrict_to_rennes:
+            cp_valid = cp.startswith("35")
+            if not cp_valid:
+                print(f"[Warning] CP {cp} hors Ille-et-Vilaine - recherche limitee au departement 35")
+                cp = "35"
+
         results = []
         for s in data["stations"]:
+            # Double filtre si restriction active
+            if self.restrict_to_rennes and not s["cp"].startswith("35"):
+                continue
+            
             if s["cp"].startswith(cp):
                 if fuel_type in s["prices"]:
                     results.append(
@@ -189,6 +219,7 @@ class FuelPriceScraper:
                             "ville": s["ville"],
                             "adresse": s["adresse"],
                             "cp": s["cp"],
+                            "fuel_type": fuel_type,
                             "price": s["prices"][fuel_type]["price"],
                             "updated": s["prices"][fuel_type]["updated"],
                         }
@@ -209,18 +240,28 @@ class FuelPriceScraper:
     def get_stats(self) -> Dict:
         data = self.fetch_daily_prices()
 
+        # 🔒 RESTRICTION RENNES si activée
+        stations = data["stations"]
+        if self.restrict_to_rennes:
+            stations = [
+                s for s in stations
+                if any(s["cp"].startswith(cp) for cp in RENNES_METRO_POSTAL_CODES)
+            ]
+
         prices = [
             s["prices"]["Gazole"]["price"]
-            for s in data["stations"]
+            for s in stations
             if "Gazole" in s["prices"]
         ]
 
         if not prices:
             return {"error": "Aucune donnée Gazole"}
 
+        location_info = "Rennes Métropole" if self.restrict_to_rennes else "France"
         return {
             "date": data["date"],
-            "total_stations": data["total_stations"],
+            "location": location_info,
+            "total_stations": len(stations),
             "gazole": {
                 "min": min(prices),
                 "max": max(prices),

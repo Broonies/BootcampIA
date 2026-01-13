@@ -11,9 +11,10 @@ from app.mcp_sim import MCPSimulator
 
 app = FastAPI(title="Chatbot IA Local API")
 
+# --- MODIFICATION 1 : CORS permissifs pour le dev ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*"],  # Autorise toutes les origines (pratique pour le dev)
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -141,17 +142,53 @@ def format_traffic_results(mcp_result: dict) -> str:
     return txt
 
 
+def format_parking_results(mcp_result: dict) -> str:
+    """Formate les données de parkings Rennes pour le LLM"""
+
+    data = mcp_result.get("result", {})
+
+    if not data.get("success"):
+        return f"❌ Erreur parkings: {data.get('error', 'Erreur inconnue')}"
+
+    parkings = data.get("parkings", [])
+    updated = data.get("updated", "maintenant")
+
+    if not parkings:
+        return f"⚠️ Aucune donnée de parking disponible (mis à jour à {updated})"
+
+    txt = f"🅿️ Parkings à Rennes ({updated}):\n\n"
+
+    # Afficher top 10 parkings avec le plus de places disponibles
+    for p in parkings[:10]:
+        txt += f"• {p['name']}\n"
+        txt += f"  {p['status']} - {p['available']}/{p['total']} places\n"
+        if p.get('location'):
+            txt += f"  📍 {p['location']}\n"
+        
+        # Afficher les tarifs si disponibles
+        if p.get('pricing'):
+            tarifs_str = ", ".join([f"{duree}: {prix}" for duree, prix in p['pricing'].items()])
+            txt += f"  💰 Tarifs: {tarifs_str}\n"
+        
+        txt += "\n"
+
+    txt += f"💡 {len(parkings)} parking(s) surveillés"
+    return txt
+
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     try:
         print(f"📨 Message reçu: {request.message}")
-        
-        # 1. Traiter avec MCP pour détecter l'intention
+
+        # 1. MCP – détection + exécution
         mcp_result = mcp.process_message(request.message)
-        tool_used = mcp_result.get('tool')
-        
+        tool_used = mcp_result.get("tool")
+
         context = ""
-        # 🔒 BLOQUE TOUT CE QUI N'EST PAS MOBILITÉ
+        raw_results = None
+
+        # 🔒 Bloquer tout ce qui n’est pas mobilité
         if not tool_used:
             return {
                 "response": (
@@ -163,80 +200,94 @@ async def chat(request: ChatRequest):
                     "• trafic et itinéraires\n\n"
                     "Pose-moi une question liée à tes déplacements."
                 ),
-                "tool_used": None
+                "tool_used": None,
+                "data": None
             }
 
-        # 2. Exécuter l'outil MCP si nécessaire
-        if tool_used and tool_used != "scrape_website":
+        # 2. Outils MCP (fuel, traffic, etc.)
+        if tool_used != "scrape_website":
             print(f"🔧 Outil MCP détecté: {tool_used}")
-            # Formater selon le type d'outil
+
+            # Format texte pour le LLM
             if tool_used == "get_traffic_status":
                 context = format_traffic_results(mcp_result)
+            elif tool_used == "get_parking_status":
+                context = format_parking_results(mcp_result)
             else:
                 context = format_fuel_results(mcp_result)
+
+            # Extraction données brutes pour le frontend
+            data_content = mcp_result.get("result", {})
+
+            if data_content.get("success"):
+                if tool_used == "get_cheapest_station":
+                    raw_results = data_content.get("cheapest_stations", [])
+                elif tool_used == "search_fuel_prices":
+                    raw_results = data_content.get("results", [])
+
             print(f"📊 Contexte généré: {context[:200]}...")
-        
-        # 3. Scraping classique si URL détectée
-        elif tool_used == "scrape_website":
+
+        # 3. Scraping de page web si URL
+        else:
             import re
-            urls = re.findall(r'https?://[^\s]+', request.message)
+            urls = re.findall(r"https?://[^\s]+", request.message)
             if urls:
                 scraped = scrape_url(urls[0])
-                if scraped['success']:
-                    context = f"""Données scrapées de {urls[0]}:
-Titre: {scraped['title']}
-Contenu: {scraped['content'][:1500]}"""
-        
-        # 4. Construire le prompt pour le LLM
+                if scraped.get("success"):
+                    context = (
+                        f"Données scrapées de {urls[0]}:\n"
+                        f"Titre: {scraped.get('title')}\n"
+                        f"Contenu: {scraped.get('content')[:1500]}"
+                    )
+
+        # 4. Prompt LLM verrouillé mobilité Rennes
         if context:
-            system_prompt = f"""Tu es un assistant spécialisé dans l'aide aux automobilistes Rennes Métropole.
-
-Données disponibles:
-{context}
-
+            system_prompt = f"""
 Tu es un assistant IA spécialisé exclusivement dans l'aide aux automobilistes sur Rennes Métropole.
 
-Tu n'as accès qu'aux données fournies dans le contexte.
+Tu n'as accès qu'aux données suivantes :
+{context}
+
 Tu n'as PAS le droit de :
 - donner des conseils généraux
 - répondre à des questions hors mobilité
 - inventer des prix, itinéraires ou parkings
 - utiliser des connaissances externes
 
-Si l'utilisateur demande quelque chose en dehors de :
-- prix carburants
+Si l'utilisateur demande autre chose que :
+- carburant
 - parkings
 - trafic
 - itinéraires
 tu dois répondre :
-
-"Je suis un assistant mobilité Rennes. Je ne peux répondre qu'aux questions liées aux déplacements, carburants et stationnement."""
-
-            
-            full_message = f"{system_prompt}\n\nQuestion de l'utilisateur: {request.message}"
+"Je suis un assistant mobilité Rennes."
+"""
+            full_message = f"{system_prompt}\n\nQuestion: {request.message}"
         else:
             full_message = request.message
-        
-        # 5. Appeler le LLM
+
+        # 5. Appel LLM
         print("🤖 Appel au LLM...")
         response = llm_service.chat(
             message=full_message,
             context="",
             history=request.history
         )
-        
-        print(f"✅ Réponse générée")
-        
+        print("✅ Réponse générée")
+
+        # 6. Réponse API
         return {
             "response": response,
             "tool_used": tool_used,
-            "scraped_data": context if context else None
+            "data": raw_results,
+            "context": context
         }
-        
+
     except Exception as e:
         print(f"❌ ERREUR: {str(e)}")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/health")
 async def health():
@@ -286,6 +337,15 @@ async def get_traffic():
     """Endpoint dédié pour l'état du trafic"""
     try:
         result = mcp.execute_tool("get_traffic_status", {})
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/parkings")
+async def get_parkings():
+    """Endpoint dédié pour la disponibilité des parkings"""
+    try:
+        result = mcp.execute_tool("get_parking_status", {})
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

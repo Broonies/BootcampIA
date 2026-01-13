@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 import requests
 from app.tools.fuel_scraper import FuelPriceScraper
 from app.tools.traffic_scraper import TrafficScraper
+from app.tools.parking_scraper import ParkingScraper
 
 class MCPSimulator:
     """
@@ -12,8 +13,9 @@ class MCPSimulator:
     """
     
     def __init__(self):
-        self.fuel_scraper = FuelPriceScraper()
+        self.fuel_scraper = FuelPriceScraper(restrict_to_rennes=True)
         self.traffic_scraper = TrafficScraper()
+        self.parking_scraper = ParkingScraper()
         
         # Mapping des outils disponibles
         self.tools = {
@@ -22,6 +24,7 @@ class MCPSimulator:
             "compare_fuel_prices": self._compare_fuel_prices,
             "get_fuel_stats": self._get_fuel_stats,
             "get_traffic_status": self._get_traffic_status,
+            "get_parking_status": self._get_parking_status,
             "scrape_website": self._detect_scraping,
         }
     
@@ -36,11 +39,17 @@ class MCPSimulator:
             'gazole', 'essence', 'carburant', 'sp95', 'sp98', 'e10', 'e85',
             'station', 'prix', 'moins cher', 'pas cher', 'économique', 
         ]
-        traffic_keywords = ['traffic', 'bouchons', 'congestion', 'embouteillage',
-        'circulation', 'route', 'routes', 'autoroute', 'voie', 'rue', 'boulevard',
-        'péage', 'temps de trajet', 'ralentissement', 'accident',
-            'tfic', 'route', 'trafic', 'congestion', 'bouchon', 'ralenti',
+        traffic_keywords = [
+            'traffic', 'bouchons', 'congestion', 'embouteillage',
+            'circulation', 'route', 'routes', 'autoroute', 'voie', 'rue', 'boulevard',
+            'péage', 'temps de trajet', 'ralentissement', 'accident',
+            'tfic', 'trafic', 'bouchon', 'ralenti',
         ]
+        parking_keywords = [
+            'parking', 'parkings', 'stationner', 'stationnement', 
+            'place', 'places', 'garer', 'garage', 'park'
+        ]
+        
         #LOGIQUE POUR LES REQUETES CARBURANT
         if any(keyword in message_lower for keyword in fuel_keywords):
             # Déterminer le type de requête carburant
@@ -52,9 +61,15 @@ class MCPSimulator:
                 return "get_fuel_stats"
             else:
                 return "search_fuel_prices"
-       #LOGIQUE POUR LES REQUETES TRAFIC
+        
+        #LOGIQUE POUR LES REQUETES TRAFIC
         if any(word in message_lower for word in traffic_keywords):
             return "get_traffic_status"
+        
+        #LOGIQUE POUR LES REQUETES PARKING
+        if any(word in message_lower for word in parking_keywords):
+            return "get_parking_status"
+        
         # Détection scraping classique
         if re.search(r'https?://\S+', user_message):
             return "scrape_website"
@@ -115,6 +130,11 @@ class MCPSimulator:
             if ville_match:
                 params['ville'] = ville_match.group(1)
                 break
+
+        # Défaut : département 35 si aucune localisation fournie
+        if 'code_postal' not in params and 'ville' not in params:
+            params['code_postal'] = '35'
+            params['ville'] = 'Rennes'
         
         # Limite de résultats
         if any(word in message_lower for word in ['top 3', '3 premiers', 'trois']):
@@ -211,6 +231,20 @@ class MCPSimulator:
             "params": params,
             "result": result
         }
+
+    def _get_traffic_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Retourne l'état du trafic pour Rennes Métropole
+        Délègue au TrafficScraper pour le parsing des données
+        """
+        return self.traffic_scraper.get_traffic_status()
+    
+    def _get_parking_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Retourne la disponibilité des parkings à Rennes
+        Délègue au ParkingScraper
+        """
+        return self.parking_scraper.get_parking_status()
 
     def _get_traffic_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
