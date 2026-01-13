@@ -2,6 +2,8 @@
 
 import requests
 from typing import Dict, List, Any, Optional
+import unicodedata
+from difflib import SequenceMatcher
 from datetime import datetime
 
 
@@ -14,8 +16,9 @@ class TrafficScraper:
     def __init__(self):
         self.base_url = "https://rennes-metropole.opendatasoft.com/api/records/1.0/search/"
         self.dataset = "etat-du-trafic-en-temps-reel"
+        self._geocode_cache: Dict[str, Dict[str, str]] = {}
 
-    def get_traffic_status(self) -> Dict[str, Any]:
+    def get_traffic_status(self, street_query: str | None = None) -> Dict[str, Any]:
         """
         Récupère et formate les données de trafic pour Rennes Métropole
         
@@ -98,34 +101,52 @@ class TrafficScraper:
             # 3) Structurer pour le LLM - synthèse par statut
             road_summary = []
 
+            # Budget de géocodage pour éviter la lenteur (max 30 requêtes par appel)
+            geocode_budget = 30
+
+            # Helper geocode + enrichissement
+            def _enrich(entry: Dict[str, Any], status_label: str, priority: str, can_geocode: bool) -> Dict[str, Any]:
+                lat = entry.get("lat")
+                lon = entry.get("lon")
+                geocoded = {}
+                if can_geocode and lat is not None and lon is not None:
+                    geocoded = self._reverse_geocode(lat, lon) or {}
+
+                display = geocoded.get("label") or entry.get("troncon")
+                area = geocoded.get("area")
+                return {
+                    "street": display,
+                    "raw_street": entry.get("troncon"),
+                    "area": area,
+                    "lat": lat,
+                    "lon": lon,
+                    "status": status_label,
+                    "priority": priority
+                }
+
             # Routes en congestion/incident (priorité haute)
             for entry in traffic_by_status["congestion"]:
-                road_summary.append({
-                    "street": entry.get("troncon"),
-                    "lat": entry.get("lat"),
-                    "lon": entry.get("lon"),
-                    "status": "⚠️ Congestion",
-                    "priority": "haute"
-                })
+                can_geo = geocode_budget > 0
+                road_summary.append(_enrich(entry, "⚠️ Congestion", "haute", can_geo))
+                if can_geo:
+                    geocode_budget -= 1
 
             for entry in traffic_by_status["incident"]:
-                road_summary.append({
-                    "street": entry.get("troncon"),
-                    "lat": entry.get("lat"),
-                    "lon": entry.get("lon"),
-                    "status": "🚨 Incident",
-                    "priority": "critique"
-                })
+                can_geo = geocode_budget > 0
+                road_summary.append(_enrich(entry, "🚨 Incident", "critique", can_geo))
+                if can_geo:
+                    geocode_budget -= 1
 
             # Routes denses (priorité moyenne) - limiter à 5
             for entry in traffic_by_status["denso"][:5]:
-                road_summary.append({
-                    "street": entry.get("troncon"),
-                    "lat": entry.get("lat"),
-                    "lon": entry.get("lon"),
-                    "status": "📍 Dense",
-                    "priority": "moyen"
-                })
+                can_geo = geocode_budget > 0
+                road_summary.append(_enrich(entry, "📍 Dense", "moyen", can_geo))
+                if can_geo:
+                    geocode_budget -= 1
+
+            # Si l'utilisateur a donné un nom de rue, tenter un appariement flou
+            if street_query:
+                road_summary = self._filter_best_match(road_summary, street_query)
 
             # Générer résumé
             summary = self._generate_summary(traffic_by_status)
@@ -177,3 +198,85 @@ class TrafficScraper:
     def _get_current_time() -> str:
         """Retourne l'heure actuelle formatée HH:MM"""
         return datetime.now().strftime("%H:%M")
+
+    def _reverse_geocode(self, lat: float, lon: float) -> Dict[str, str]:
+        """Reverse geocode via Nominatim (OSM) with simple cache, Rennes only"""
+        key = f"{lat:.5f},{lon:.5f}"
+        if key in self._geocode_cache:
+            return self._geocode_cache[key]
+
+        try:
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params={
+                    "lat": lat,
+                    "lon": lon,
+                    "format": "jsonv2",
+                    "zoom": 18,
+                    "addressdetails": 1
+                },
+                headers={"User-Agent": "FuelBot-Rennes/1.0"},
+                timeout=5
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            address = data.get("address", {})
+
+            road = address.get("road") or address.get("pedestrian") or address.get("residential")
+            area = address.get("neighbourhood") or address.get("suburb") or address.get("city_district")
+            city = address.get("city") or address.get("town")
+            postcode = address.get("postcode")
+
+            # Ne garder que Rennes / CP 35***
+            if postcode and not str(postcode).startswith("35"):
+                result = {"label": road or data.get("display_name", "Rennes"), "area": area}
+            else:
+                result = {
+                    "label": ", ".join([p for p in [road, area] if p]) or road or data.get("display_name", "Rennes"),
+                    "area": area,
+                    "city": city,
+                    "postcode": postcode
+                }
+
+            self._geocode_cache[key] = result
+            return result
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """Minuscule + suppression des accents et espaces multiples"""
+        if not text:
+            return ""
+        text = text.lower()
+        text = unicodedata.normalize("NFKD", text)
+        text = "".join(c for c in text if not unicodedata.combining(c))
+        return " ".join(text.split())
+
+    def _fuzzy_score(self, a: str, b: str) -> float:
+        return SequenceMatcher(None, a, b).ratio()
+
+    def _filter_best_match(self, roads: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+        """Renvoie les tronçons les plus proches du nom demandé"""
+        norm_q = self._normalize(query)
+        if not norm_q:
+            return roads
+
+        scored: List[tuple[float, Dict[str, Any]]] = []
+        for r in roads:
+            candidates = [r.get("street"), r.get("raw_street"), r.get("area")]
+            best = 0.0
+            for c in candidates:
+                if not c:
+                    continue
+                score = self._fuzzy_score(norm_q, self._normalize(str(c)))
+                best = max(best, score)
+            scored.append((best, r))
+
+        # Garder ceux au-dessus d'un seuil, sinon renvoyer le meilleur seul
+        threshold = 0.55
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top_score = scored[0][0] if scored else 0
+        filtered = [r for s, r in scored if s >= max(threshold, top_score - 0.05)]
+
+        return filtered if filtered else roads

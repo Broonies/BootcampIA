@@ -114,27 +114,32 @@ def format_traffic_results(mcp_result: dict) -> str:
     high = [r for r in roads if r.get("priority") == "haute"]
     medium = [r for r in roads if r.get("priority") == "moyen"]
     
-    def _fmt(street: str, lat: float | None, lon: float | None) -> str:
+    def _fmt(item: dict) -> str:
+        street = item.get('street', '?')
+        area = item.get('area')
+        lat = item.get('lat')
+        lon = item.get('lon')
+        label = street if not area else f"{street} – {area}"
         if lat is not None and lon is not None:
-            return f"{street} ({lat:.5f}, {lon:.5f})"
-        return street
+            return f"{label} ({lat:.5f}, {lon:.5f})"
+        return label
 
     if critical:
         txt += "🚨 CRITIQUE:\n"
         for r in critical:
-            txt += f"  • {_fmt(r.get('street', '?'), r.get('lat'), r.get('lon'))} - {r.get('status', '?')}\n"
+            txt += f"  • {_fmt(r)} - {r.get('status', '?')}\n"
         txt += "\n"
     
     if high:
         txt += "⚠️ PERTURBATIONS:\n"
         for r in high:
-            txt += f"  • {_fmt(r.get('street', '?'), r.get('lat'), r.get('lon'))} - {r.get('status', '?')}\n"
+            txt += f"  • {_fmt(r)} - {r.get('status', '?')}\n"
         txt += "\n"
     
     if medium:
         txt += "📍 DENSE:\n"
         for r in medium[:5]:
-            txt += f"  • {_fmt(r.get('street', '?'), r.get('lat'), r.get('lon'))} - {r.get('status', '?')}\n"
+            txt += f"  • {_fmt(r)} - {r.get('status', '?')}\n"
         if len(medium) > 5:
             txt += f"  ... et {len(medium)-5} autres zones denses\n"
     
@@ -164,12 +169,6 @@ def format_parking_results(mcp_result: dict) -> str:
         txt += f"  {p['status']} - {p['available']}/{p['total']} places\n"
         if p.get('location'):
             txt += f"  📍 {p['location']}\n"
-        
-        # Afficher les tarifs si disponibles
-        if p.get('pricing'):
-            tarifs_str = ", ".join([f"{duree}: {prix}" for duree, prix in p['pricing'].items()])
-            txt += f"  💰 Tarifs: {tarifs_str}\n"
-        
         txt += "\n"
 
     txt += f"💡 {len(parkings)} parking(s) surveillés"
