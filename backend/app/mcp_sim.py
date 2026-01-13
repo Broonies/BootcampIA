@@ -1,7 +1,10 @@
 # backend/app/mcp_sim.py
 import re
 from typing import Optional, Dict, Any
+
+import requests
 from app.tools.fuel_scraper import FuelPriceScraper
+from app.tools.traffic_scraper import TrafficScraper
 
 class MCPSimulator:
     """
@@ -10,6 +13,7 @@ class MCPSimulator:
     
     def __init__(self):
         self.fuel_scraper = FuelPriceScraper()
+        self.traffic_scraper = TrafficScraper()
         
         # Mapping des outils disponibles
         self.tools = {
@@ -17,6 +21,7 @@ class MCPSimulator:
             "get_cheapest_station": self._get_cheapest_station,
             "compare_fuel_prices": self._compare_fuel_prices,
             "get_fuel_stats": self._get_fuel_stats,
+            "get_traffic_status": self._get_traffic_status,
             "scrape_website": self._detect_scraping,
         }
     
@@ -29,9 +34,14 @@ class MCPSimulator:
         # Détection prix carburant
         fuel_keywords = [
             'gazole', 'essence', 'carburant', 'sp95', 'sp98', 'e10', 'e85',
-            'station', 'prix', 'moins cher', 'pas cher', 'économique'
+            'station', 'prix', 'moins cher', 'pas cher', 'économique', 
         ]
-        
+        traffic_keywords = ['traffic', 'bouchons', 'congestion', 'embouteillage',
+        'circulation', 'route', 'routes', 'autoroute', 'voie', 'rue', 'boulevard',
+        'péage', 'temps de trajet', 'ralentissement', 'accident',
+            'tfic', 'route', 'trafic', 'congestion', 'bouchon', 'ralenti',
+        ]
+        #LOGIQUE POUR LES REQUETES CARBURANT
         if any(keyword in message_lower for keyword in fuel_keywords):
             # Déterminer le type de requête carburant
             if any(word in message_lower for word in ['moins cher', 'cheapest', 'économique', 'pas cher']):
@@ -42,7 +52,9 @@ class MCPSimulator:
                 return "get_fuel_stats"
             else:
                 return "search_fuel_prices"
-        
+       #LOGIQUE POUR LES REQUETES TRAFIC
+        if any(word in message_lower for word in traffic_keywords):
+            return "get_traffic_status"
         # Détection scraping classique
         if re.search(r'https?://\S+', user_message):
             return "scrape_website"
@@ -200,6 +212,13 @@ class MCPSimulator:
             "result": result
         }
 
+    def _get_traffic_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Retourne l'état du trafic pour Rennes Métropole
+        Délègue au TrafficScraper pour le parsing des données
+        """
+        return self.traffic_scraper.get_traffic_status()
+        
 
 # Tests
 if __name__ == "__main__":

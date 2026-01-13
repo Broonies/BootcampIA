@@ -90,6 +90,57 @@ def format_fuel_results(mcp_result: dict) -> str:
 
     return "Données MCP reçues mais non formatées"
 
+
+def format_traffic_results(mcp_result: dict) -> str:
+    """Formate les données de trafic Rennes pour le LLM"""
+
+    data = mcp_result.get("result", {})
+
+    if not data.get("success"):
+        return f"❌ Erreur trafic: {data.get('error', 'Erreur inconnue')}"
+
+    roads = data.get("roads", [])
+    summary = data.get("summary", "Données de trafic")
+    updated = data.get("updated", "maintenant")
+
+    if not roads:
+        return f"🟢 {summary} à Rennes (mis à jour à {updated})"
+
+    txt = f"🚦 État du trafic Rennes - {summary} ({updated}):\n\n"
+
+    # Regrouper par priorité pour meilleure lisibilité
+    critical = [r for r in roads if r.get("priority") == "critique"]
+    high = [r for r in roads if r.get("priority") == "haute"]
+    medium = [r for r in roads if r.get("priority") == "moyen"]
+    
+    def _fmt(street: str, lat: float | None, lon: float | None) -> str:
+        if lat is not None and lon is not None:
+            return f"{street} ({lat:.5f}, {lon:.5f})"
+        return street
+
+    if critical:
+        txt += "🚨 CRITIQUE:\n"
+        for r in critical:
+            txt += f"  • {_fmt(r.get('street', '?'), r.get('lat'), r.get('lon'))} - {r.get('status', '?')}\n"
+        txt += "\n"
+    
+    if high:
+        txt += "⚠️ PERTURBATIONS:\n"
+        for r in high:
+            txt += f"  • {_fmt(r.get('street', '?'), r.get('lat'), r.get('lon'))} - {r.get('status', '?')}\n"
+        txt += "\n"
+    
+    if medium:
+        txt += "📍 DENSE:\n"
+        for r in medium[:5]:
+            txt += f"  • {_fmt(r.get('street', '?'), r.get('lat'), r.get('lon'))} - {r.get('status', '?')}\n"
+        if len(medium) > 5:
+            txt += f"  ... et {len(medium)-5} autres zones denses\n"
+    
+    txt += f"\n💡 {len(roads)} axe(s) perturbé(s) actuellement"
+    return txt
+
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     try:
@@ -100,11 +151,29 @@ async def chat(request: ChatRequest):
         tool_used = mcp_result.get('tool')
         
         context = ""
-        
+        # 🔒 BLOQUE TOUT CE QUI N'EST PAS MOBILITÉ
+        if not tool_used:
+            return {
+                "response": (
+                    "🚗 Je suis un assistant mobilité Rennes.\n\n"
+                    "Je peux t'aider pour :\n"
+                    "• prix des carburants\n"
+                    "• stations essence\n"
+                    "• parkings\n"
+                    "• trafic et itinéraires\n\n"
+                    "Pose-moi une question liée à tes déplacements."
+                ),
+                "tool_used": None
+            }
+
         # 2. Exécuter l'outil MCP si nécessaire
         if tool_used and tool_used != "scrape_website":
             print(f"🔧 Outil MCP détecté: {tool_used}")
-            context = format_fuel_results(mcp_result)
+            # Formater selon le type d'outil
+            if tool_used == "get_traffic_status":
+                context = format_traffic_results(mcp_result)
+            else:
+                context = format_fuel_results(mcp_result)
             print(f"📊 Contexte généré: {context[:200]}...")
         
         # 3. Scraping classique si URL détectée
@@ -120,16 +189,29 @@ Contenu: {scraped['content'][:1500]}"""
         
         # 4. Construire le prompt pour le LLM
         if context:
-            system_prompt = f"""Tu es un assistant spécialisé dans l'aide aux automobilistes pour trouver les meilleurs prix de carburant.
+            system_prompt = f"""Tu es un assistant spécialisé dans l'aide aux automobilistes Rennes Métropole.
 
 Données disponibles:
 {context}
 
-Instructions:
-- Réponds de manière claire et concise
-- Mets en avant les informations les plus pertinentes
-- Utilise des émojis pour rendre la réponse plus lisible
-- Si c'est une question sur les prix, base-toi UNIQUEMENT sur les données fournies"""
+Tu es un assistant IA spécialisé exclusivement dans l'aide aux automobilistes sur Rennes Métropole.
+
+Tu n'as accès qu'aux données fournies dans le contexte.
+Tu n'as PAS le droit de :
+- donner des conseils généraux
+- répondre à des questions hors mobilité
+- inventer des prix, itinéraires ou parkings
+- utiliser des connaissances externes
+
+Si l'utilisateur demande quelque chose en dehors de :
+- prix carburants
+- parkings
+- trafic
+- itinéraires
+tu dois répondre :
+
+"Je suis un assistant mobilité Rennes. Je ne peux répondre qu'aux questions liées aux déplacements, carburants et stationnement."""
+
             
             full_message = f"{system_prompt}\n\nQuestion de l'utilisateur: {request.message}"
         else:
@@ -196,5 +278,14 @@ async def refresh_fuel_data():
     try:
         mcp.fuel_scraper.fetch_daily_prices(force_refresh=True)
         return {"status": "success", "message": "Données rafraîchies"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/traffic")
+async def get_traffic():
+    """Endpoint dédié pour l'état du trafic"""
+    try:
+        result = mcp.execute_tool("get_traffic_status", {})
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
