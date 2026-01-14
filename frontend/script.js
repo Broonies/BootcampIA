@@ -4,20 +4,50 @@ let userLocation = null;
 
 function getUserLocation() {
   if (!navigator.geolocation) {
-    console.warn("Geolocation non supportée");
+    console.warn("❌ Geolocation non supportée - utilisant position par défaut");
+    // Fallback: position par défaut (Rennes centre)
+    userLocation = {
+      lat: 48.1104,
+      lon: -1.6769
+    };
     return;
   }
 
+  // Timeout après 5 secondes
+  const timeoutId = setTimeout(() => {
+    console.warn("⚠️ Geolocation timeout (>5s) - utilisant fallback");
+    if (!userLocation) {
+      userLocation = {
+        lat: 48.1104,
+        lon: -1.6769
+      };
+    }
+  }, 5000);
+
   navigator.geolocation.getCurrentPosition(
     (pos) => {
+      clearTimeout(timeoutId);
       userLocation = {
         lat: pos.coords.latitude,
         lon: pos.coords.longitude
       };
-      console.log("📍 Position:", userLocation);
+      console.log("✓ Position GPS acquise:", userLocation);
     },
-    () => {
-      alert("Autorise la géolocalisation pour utiliser FuelBot");
+    (err) => {
+      clearTimeout(timeoutId);
+      console.warn("⚠️ Geolocation refusée ou erreur:", err.message);
+      // Fallback
+      if (!userLocation) {
+        userLocation = {
+          lat: 48.1104,
+          lon: -1.6769
+        };
+        console.log("📍 Position fallback utilisée:", userLocation);
+      }
+    },
+    { 
+      timeout: 5000,
+      enableHighAccuracy: false
     }
   );
 }
@@ -100,13 +130,15 @@ async function sendToBackend(query) {
   try {
     // 1. Appel réel à ton API FastAPI
     // Note : On suppose que ton backend tourne sur le port 8000
+    console.log("📍 userLocation avant envoi:", userLocation);
     const response = await fetch("http://127.0.0.1:8000/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       message: query,
       history: [],
-      location: userLocation
+      latitude: userLocation ? userLocation.lat : null,
+      longitude: userLocation ? userLocation.lon : null
     }),
   });
 
