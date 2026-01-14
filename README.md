@@ -80,3 +80,31 @@
 
 **Lieux supportés :** gare, université rennes 1/2, place saint-anne, république, thabor, villejean, beaulieu, chu, etc.  
 _Voir [GPS_INTEGRATION.md](GPS_INTEGRATION.md) pour la documentation technique complète_
+
+-----------------------------------------------------------------
+
+flowchart TB
+    U[Utilisateur] --> F[Frontend<br/>HTML / CSS / JS]
+    F -->|POST /api/chat| API[API Gateway<br/>FastAPI - main.py]
+
+    API --> MCP[MCP Router<br/>mcp.py<br/>Intent + Tool selection]
+
+    MCP --> FUEL[Fuel Tool<br/>Rennes]
+    MCP --> TRAFFIC[Traffic Tool<br/>Rennes]
+    MCP --> PARK[Parking Tool<br/>Rennes]
+
+    FUEL --> OD1[OpenData Fuel]
+    TRAFFIC --> OD2[Rennes Métropole Traffic]
+    PARK --> OD3[Rennes Métropole Parking]
+
+    MCP --> DATA[Résultat MCP<br/>JSON structuré]
+
+    DATA --> BL[Business Logic<br/>Itinerary / Calculs]
+
+    BL -->|si nécessaire| LLM[LLM Service<br/>Reformulation]
+
+    BL --> RESP[Réponse API JSON]
+    LLM --> RESP
+
+    RESP --> F
+
