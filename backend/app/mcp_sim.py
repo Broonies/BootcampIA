@@ -1,242 +1,60 @@
 # backend/app/mcp_sim.py
-import re
+"""Simulateur MCP - Orchestre la détection, l'extraction et l'exécution des outils."""
 from typing import Optional, Dict, Any
 
-import requests
-from app.tools.fuel_scraper import FuelPriceScraper
-from app.tools.traffic_scraper import TrafficScraper
-from app.tools.parking_scraper import ParkingScraper
+from app.tool_detector import ToolDetector
+from app.param_extractor import ParamExtractor
+from app.tool_executor import ToolExecutor
+
 
 class MCPSimulator:
     """
-    Simule un serveur MCP avec outils de scraping et prix carburants
+    Orchestrateur MCP - Coordonne la détection, l'extraction et l'exécution d'outils.
     """
     
     def __init__(self):
-        self.fuel_scraper = FuelPriceScraper(restrict_to_rennes=True)
-        self.traffic_scraper = TrafficScraper()
-        self.parking_scraper = ParkingScraper()
-        
-        # Mapping des outils disponibles
-        self.tools = {
-            "search_fuel_prices": self._search_fuel_prices,
-            "get_cheapest_station": self._get_cheapest_station,
-            "compare_fuel_prices": self._compare_fuel_prices,
-            "get_fuel_stats": self._get_fuel_stats,
-            "get_traffic_status": self._get_traffic_status,
-            "get_parking_status": self._get_parking_status,
-            "scrape_website": self._detect_scraping,
-        }
+        self.detector = ToolDetector()
+        self.extractor = ParamExtractor()
+        self.executor = ToolExecutor()
     
-    def detect_tool_needed(self, user_message: str) -> Optional[str]:
+    def process_message(self, user_message: str, user_location: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """
-        Détecte quel outil MCP utiliser basé sur le message utilisateur
-        """
-        message_lower = user_message.lower()
+        Traite un message utilisateur : détecte l'outil, extrait les paramètres, et exécute l'outil.
         
-        # Détection prix carburant
-        fuel_keywords = [
-            'gazole', 'essence', 'carburant', 'sp95', 'sp98', 'e10', 'e85',
-            'station', 'prix', 'moins cher', 'pas cher', 'économique', 
-        ]
-        traffic_keywords = [
-            'traffic', 'bouchons', 'congestion', 'embouteillage',
-            'circulation', 'route', 'routes', 'autoroute', 'voie', 'rue', 'boulevard',
-            'péage', 'temps de trajet', 'ralentissement', 'accident',
-            'tfic', 'trafic', 'bouchon', 'ralenti',
-        ]
-        parking_keywords = [
-            'parking', 'parkings', 'stationner', 'stationnement', 
-            'place', 'places', 'garer', 'garage', 'park'
-        ]
-        
-        #LOGIQUE POUR LES REQUETES CARBURANT
-        if any(keyword in message_lower for keyword in fuel_keywords):
-            # Déterminer le type de requête carburant
-            if any(word in message_lower for word in ['moins cher', 'cheapest', 'économique', 'pas cher']):
-                return "get_cheapest_station"
-            elif any(word in message_lower for word in ['compare', 'comparaison', 'différence']):
-                return "compare_fuel_prices"
-            elif any(word in message_lower for word in ['statistique', 'moyenne', 'stats']):
-                return "get_fuel_stats"
-            else:
-                return "search_fuel_prices"
-        
-        #LOGIQUE POUR LES REQUETES TRAFIC
-        if any(word in message_lower for word in traffic_keywords):
-            return "get_traffic_status"
-        
-        #LOGIQUE POUR LES REQUETES PARKING
-        if any(word in message_lower for word in parking_keywords):
-            return "get_parking_status"
-        
-        # Détection scraping classique
-        if re.search(r'https?://\S+', user_message):
-            return "scrape_website"
-        
-        if any(keyword in message_lower for keyword in ['scrape', 'récupère', 'extrait']):
-            return "scrape_website"
-        
-        return None
-    
-    def execute_tool(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Exécute un outil MCP avec les paramètres donnés
-        """
-        if tool_name in self.tools:
-            return self.tools[tool_name](params)
-        return {"error": f"Outil {tool_name} inconnu"}
-    
-    def _extract_params_from_message(self, message: str, tool_name: str) -> Dict[str, Any]:
-        """
-        Extrait automatiquement les paramètres du message utilisateur
-        """
-        message_lower = message.lower()
-        params = {}
-        
-        # Extraction du type de carburant
-        fuel_types = {
-            'gazole': 'Gazole',
-            'diesel': 'Gazole',
-            'sp95': 'SP95',
-            'sp98': 'SP98',
-            'e10': 'E10',
-            'e85': 'E85',
-            'gpl': 'GPLc'
-        }
-        
-        for key, value in fuel_types.items():
-            if key in message_lower:
-                params['fuel_type'] = value
-                break
-        
-        if 'fuel_type' not in params:
-            params['fuel_type'] = 'Gazole'  # Par défaut
-        
-        # Extraction de la ville ou code postal
-        # Chercher un code postal (5 chiffres)
-        cp_match = re.search(r'\b\d{5}\b', message)
-        if cp_match:
-            params['code_postal'] = cp_match.group()
-        
-        # Chercher une ville (mot en majuscule ou après "à", "dans")
-        ville_patterns = [
-            r'(?:à|dans|sur)\s+([A-Z][a-zéèêàâôù\-]+(?:\s+[A-Z][a-zéèêàâôù\-]+)*)',
-            r'\b([A-Z][a-zéèêàâôù]{3,})\b'
-        ]
-        
-        for pattern in ville_patterns:
-            ville_match = re.search(pattern, message)
-            if ville_match:
-                params['ville'] = ville_match.group(1)
-                break
-
-        # Défaut : département 35 si aucune localisation fournie
-        if 'code_postal' not in params and 'ville' not in params:
-            params['code_postal'] = '35'
-            params['ville'] = 'Rennes'
-
-        # Extraction d'une rue potentielle pour le trafic
-        if tool_name == 'get_traffic_status':
-            street_patterns = [
-                r"(?:rue|avenue|av\.?|boulevard|bd\.?|quai|route|chemin|allee|impasse|place)\s+([A-Za-zÀ-ÿ'\- ]{3,})",
-                r'"([^"]{3,})"',
-            ]
-            for pat in street_patterns:
-                m = re.search(pat, message, flags=re.IGNORECASE)
-                if m:
-                    params['street_query'] = m.group(1).strip()
-                    break
-        
-        # Limite de résultats
-        if any(word in message_lower for word in ['top 3', '3 premiers', 'trois']):
-            params['limit'] = 3
-        elif any(word in message_lower for word in ['top 5', '5 premiers', 'cinq']):
-            params['limit'] = 5
-        else:
-            params['limit'] = 5
-        
-        return params
-    
-    def _search_fuel_prices(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Recherche les prix de carburant"""
-        ville = params.get('ville')
-        code_postal = params.get('code_postal')
-        fuel_type = params.get('fuel_type', 'Gazole')
-        
-        try:
-            if code_postal:
-                results = self.fuel_scraper.search_by_postal_code(code_postal, fuel_type)
-            elif ville:
-                results = self.fuel_scraper.search_by_city(ville, fuel_type)
-            else:
-                return {"error": "Ville ou code postal requis"}
+        Args:
+            user_message: Message de l'utilisateur
+            user_location: Position GPS optionnelle {"latitude": float, "longitude": float}
             
-            return {
-                "success": True,
-                "fuel_type": fuel_type,
-                "location": ville or code_postal,
-                "results": results[:10],  # Limiter à 10 résultats
-                "count": len(results)
-            }
-        except Exception as e:
-            return {"error": str(e)}
-    
-    def _get_cheapest_station(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Trouve les stations les moins chères"""
-        ville = params.get('ville')
-        code_postal = params.get('code_postal')
-        fuel_type = params.get('fuel_type', 'Gazole')
-        limit = params.get('limit', 5)
-        
-        try:
-            if code_postal:
-                results = self.fuel_scraper.search_by_postal_code(code_postal, fuel_type)
-            elif ville:
-                results = self.fuel_scraper.get_cheapest_in_city(ville, fuel_type, limit)
-            else:
-                return {"error": "Ville ou code postal requis"}
-            
-            return {
-                "success": True,
-                "fuel_type": fuel_type,
-                "location": ville or code_postal,
-                "cheapest_stations": results[:limit]
-            }
-        except Exception as e:
-            return {"error": str(e)}
-    
-    def _compare_fuel_prices(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Compare les prix entre plusieurs villes"""
-        # À implémenter selon les besoins
-        return {"info": "Comparaison non implémentée"}
-    
-    def _get_fuel_stats(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Retourne les statistiques globales"""
-        try:
-            stats = self.fuel_scraper.get_stats()
-            return {
-                "success": True,
-                "stats": stats
-            }
-        except Exception as e:
-            return {"error": str(e)}
-    
-    def _detect_scraping(self, params: Dict[str, Any]) -> bool:
-        """Détecte si scraping nécessaire"""
-        return True
-    
-    def process_message(self, message: str) -> Dict[str, Any]:
+        Returns:
+            Résultat contenant l'outil détecté, les paramètres, et le résultat
         """
-        Process complet: détecte l'outil, extrait les params, et exécute
-        """
-        tool_name = self.detect_tool_needed(message)
+        print(f"\n[MCP] Message: {user_message}")
+        print(f"[MCP] User location: {user_location}")
         
+        # 1. Détection de l'outil
+        tool_name = self.detector.detect(user_message)
         if not tool_name:
-            return {"tool": None}
+            print("[MCP] Aucun outil détecté")
+            return {
+                "tool": None,
+                "params": {},
+                "result": {"error": "Je ne comprends pas votre demande"}
+            }
         
-        params = self._extract_params_from_message(message, tool_name)
-        result = self.execute_tool(tool_name, params)
+        print(f"[MCP] Outil détecté: {tool_name}")
+        
+        # 2. Extraction des paramètres
+        params = self.extractor.extract(user_message, tool_name)
+        print(f"[MCP] Paramètres extraits: {params}")
+        
+        # 3. Ajout de la position GPS si nécessaire
+        if user_location and tool_name == 'estimate_drive_time':
+            params['user_location'] = user_location
+            print(f"[MCP] Position GPS ajoutée: {user_location}")
+        
+        # 4. Exécution de l'outil
+        result = self.executor.execute(tool_name, params)
+        print(f"[MCP] Résultat: {result}")
         
         return {
             "tool": tool_name,
@@ -244,35 +62,4 @@ class MCPSimulator:
             "result": result
         }
 
-    def _get_traffic_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Retourne l'état du trafic pour Rennes Métropole
-        Délègue au TrafficScraper pour le parsing des données
-        """
-        return self.traffic_scraper.get_traffic_status(params.get("street_query"))
-    
-    def _get_parking_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Retourne la disponibilité des parkings à Rennes
-        Délègue au ParkingScraper
-        """
-        return self.parking_scraper.get_parking_status()
-
-# Tests
-if __name__ == "__main__":
-    mcp = MCPSimulator()
-    
-    test_messages = [
-        "Quel est le prix du gazole à Paris ?",
-        "Trouve-moi les 3 stations les moins chères à Lyon",
-        "Donne-moi les stats sur le prix du carburant",
-        "Prix de l'essence dans le 75001"
-    ]
-    
-    for msg in test_messages:
-        print(f"\n📝 Message: {msg}")
-        result = mcp.process_message(msg)
-        print(f"🔧 Outil: {result['tool']}")
-        if result['tool']:
-            print(f"📊 Résultat: {result['result']}")
-        print("-" * 50)
+ 

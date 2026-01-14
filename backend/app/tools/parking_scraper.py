@@ -8,7 +8,7 @@ from datetime import datetime
 class ParkingScraper:
     """
     Scraper pour les données de parkings en temps réel de Rennes Métropole
-    Source: Opendatasoft API (données open-data officielles)
+    Source: API Opendatasoft (données open-data officielles)
     """
 
     def __init__(self):

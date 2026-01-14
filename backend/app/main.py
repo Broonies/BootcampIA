@@ -1,15 +1,20 @@
 # backend/app/main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 import traceback
 import json
 
 from app.llm import EpitechLLMService
-from app.tools.scraper import scrape_url
 from app.mcp_sim import MCPSimulator
+from app.models import ChatRequest
+from app.formatters import (
+    format_fuel_results,
+    format_traffic_results,
+    format_parking_results,
+    format_drive_time_results,
+)
 
-app = FastAPI(title="Chatbot IA Local API")
+app = FastAPI(title="API Chatbot IA Local")
 
 # --- MODIFICATION 1 : CORS permissifs pour le dev ---
 app.add_middleware(
@@ -23,165 +28,22 @@ app.add_middleware(
 llm_service = EpitechLLMService()
 mcp = MCPSimulator()
 
-class ChatRequest(BaseModel):
-    message: str
-    history: list = Field(default_factory=list)
-
-class FuelSearchRequest(BaseModel):
-    ville: str = None
-    code_postal: str = None
-    fuel_type: str = "Gazole"
-    limit: int = 5
-
-def format_fuel_results(mcp_result: dict) -> str:
-    """Formate les résultats MCP carburant pour le LLM"""
-
-    tool = mcp_result.get("tool")
-    data = mcp_result.get("result", {})
-
-    if not data.get("success"):
-        return f"❌ Erreur: {data.get('error', 'Erreur inconnue')}"
-
-    if tool == "get_cheapest_station":
-        stations = data.get("cheapest_stations", [])
-        location = data.get("location", "inconnue")
-        fuel_type = data.get("fuel_type", "Gazole")
-
-        if not stations:
-            return f"Aucune station trouvée pour {location}"
-
-        out = f"🚗 Stations les moins chères pour {fuel_type} à {location}:\n\n"
-        for i, s in enumerate(stations, 1):
-            out += (
-                f"{i}. {s['adresse']}, {s['ville']} ({s['cp']})\n"
-                f"   💰 {s['price']:.3f} €/L\n"
-                f"   🕒 {s['updated']}\n\n"
-            )
-        return out
-
-    if tool == "search_fuel_prices":
-        stations = data.get("results", [])
-        location = data.get("location", "inconnue")
-        fuel_type = data.get("fuel_type", "Gazole")
-        count = data.get("count", 0)
-
-        if not stations:
-            return f"Aucune station trouvée pour {location}"
-
-        out = f"⛽ {count} stations pour {fuel_type} à {location}:\n\n"
-        for i, s in enumerate(stations[:5], 1):
-            out += (
-                f"{i}. {s['adresse']}, {s['ville']} ({s['cp']})\n"
-                f"   💰 {s['price']:.3f} €/L\n\n"
-            )
-        return out
-
-    if tool == "get_fuel_stats":
-        stats = data.get("stats", {})
-        gazole = stats.get("gazole", {})
-
-        return (
-            f"📊 Statistiques nationales ({stats.get('date')}):\n\n"
-            f"Stations: {stats.get('total_stations')}\n"
-            f"Gazole:\n"
-            f"• Min: {gazole.get('min'):.3f} €/L\n"
-            f"• Max: {gazole.get('max'):.3f} €/L\n"
-            f"• Moyenne: {gazole.get('avg'):.3f} €/L\n"
-        )
-
-    return "Données MCP reçues mais non formatées"
-
-
-def format_traffic_results(mcp_result: dict) -> str:
-    """Formate les données de trafic Rennes pour le LLM"""
-
-    data = mcp_result.get("result", {})
-
-    if not data.get("success"):
-        return f"❌ Erreur trafic: {data.get('error', 'Erreur inconnue')}"
-
-    roads = data.get("roads", [])
-    summary = data.get("summary", "Données de trafic")
-    updated = data.get("updated", "maintenant")
-
-    if not roads:
-        return f"🟢 {summary} à Rennes (mis à jour à {updated})"
-
-    txt = f"🚦 État du trafic Rennes - {summary} ({updated}):\n\n"
-
-    # Regrouper par priorité pour meilleure lisibilité
-    critical = [r for r in roads if r.get("priority") == "critique"]
-    high = [r for r in roads if r.get("priority") == "haute"]
-    medium = [r for r in roads if r.get("priority") == "moyen"]
-    
-    def _fmt(item: dict) -> str:
-        street = item.get('street', '?')
-        area = item.get('area')
-        lat = item.get('lat')
-        lon = item.get('lon')
-        label = street if not area else f"{street} – {area}"
-        if lat is not None and lon is not None:
-            return f"{label} ({lat:.5f}, {lon:.5f})"
-        return label
-
-    if critical:
-        txt += "🚨 CRITIQUE:\n"
-        for r in critical:
-            txt += f"  • {_fmt(r)} - {r.get('status', '?')}\n"
-        txt += "\n"
-    
-    if high:
-        txt += "⚠️ PERTURBATIONS:\n"
-        for r in high:
-            txt += f"  • {_fmt(r)} - {r.get('status', '?')}\n"
-        txt += "\n"
-    
-    if medium:
-        txt += "📍 DENSE:\n"
-        for r in medium[:5]:
-            txt += f"  • {_fmt(r)} - {r.get('status', '?')}\n"
-        if len(medium) > 5:
-            txt += f"  ... et {len(medium)-5} autres zones denses\n"
-    
-    txt += f"\n💡 {len(roads)} axe(s) perturbé(s) actuellement"
-    return txt
-
-
-def format_parking_results(mcp_result: dict) -> str:
-    """Formate les données de parkings Rennes pour le LLM"""
-
-    data = mcp_result.get("result", {})
-
-    if not data.get("success"):
-        return f"❌ Erreur parkings: {data.get('error', 'Erreur inconnue')}"
-
-    parkings = data.get("parkings", [])
-    updated = data.get("updated", "maintenant")
-
-    if not parkings:
-        return f"⚠️ Aucune donnée de parking disponible (mis à jour à {updated})"
-
-    txt = f"🅿️ Parkings à Rennes ({updated}):\n\n"
-
-    # Afficher top 10 parkings avec le plus de places disponibles
-    for p in parkings[:10]:
-        txt += f"• {p['name']}\n"
-        txt += f"  {p['status']} - {p['available']}/{p['total']} places\n"
-        if p.get('location'):
-            txt += f"  📍 {p['location']}\n"
-        txt += "\n"
-
-    txt += f"💡 {len(parkings)} parking(s) surveillés"
-    return txt
-
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     try:
         print(f"📨 Message reçu: {request.message}")
+        print(f"📍 Lat/Lon reçues: {request.latitude}, {request.longitude}")
+        if request.latitude and request.longitude:
+            print(f"✓ Position GPS valide: ({request.latitude}, {request.longitude})")
+        else:
+            print(f"✗ Position GPS manquante ou None")
 
         # 1. MCP – détection + exécution
-        mcp_result = mcp.process_message(request.message)
+        mcp_result = mcp.process_message(
+            request.message,
+            user_location=(request.latitude, request.longitude) if request.latitude and request.longitude else None
+        )
         tool_used = mcp_result.get("tool")
 
         context = ""
@@ -212,6 +74,8 @@ async def chat(request: ChatRequest):
                 context = format_traffic_results(mcp_result)
             elif tool_used == "get_parking_status":
                 context = format_parking_results(mcp_result)
+            elif tool_used == "estimate_drive_time":
+                context = format_drive_time_results(mcp_result)
             else:
                 context = format_fuel_results(mcp_result)
 
@@ -226,18 +90,9 @@ async def chat(request: ChatRequest):
 
             print(f"📊 Contexte généré: {context[:200]}...")
 
-        # 3. Scraping de page web si URL
+        # 3. Scraping de page web si URL (non implémenté - outil reservé pour futur usage)
         else:
-            import re
-            urls = re.findall(r"https?://[^\s]+", request.message)
-            if urls:
-                scraped = scrape_url(urls[0])
-                if scraped.get("success"):
-                    context = (
-                        f"Données scrapées de {urls[0]}:\n"
-                        f"Titre: {scraped.get('title')}\n"
-                        f"Contenu: {scraped.get('content')[:1500]}"
-                    )
+            context = ""
 
         # 4. Prompt LLM verrouillé mobilité Rennes
         if context:
@@ -296,55 +151,3 @@ async def health():
         "model": "qwen3:30b",
         "mcp_tools": list(mcp.tools.keys())
     }
-
-@app.post("/api/fuel/search")
-async def search_fuel(request: FuelSearchRequest):
-    """Endpoint dédié pour la recherche de prix de carburant"""
-    try:
-        params = {
-            "ville": request.ville,
-            "code_postal": request.code_postal,
-            "fuel_type": request.fuel_type,
-            "limit": request.limit
-        }
-        
-        result = mcp.execute_tool("get_cheapest_station", params)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/fuel/stats")
-async def fuel_stats():
-    """Endpoint pour les statistiques carburant"""
-    try:
-        result = mcp.execute_tool("get_fuel_stats", {})
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/fuel/refresh")
-async def refresh_fuel_data():
-    """Force le rafraîchissement des données carburant"""
-    try:
-        mcp.fuel_scraper.fetch_daily_prices(force_refresh=True)
-        return {"status": "success", "message": "Données rafraîchies"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/traffic")
-async def get_traffic():
-    """Endpoint dédié pour l'état du trafic"""
-    try:
-        result = mcp.execute_tool("get_traffic_status", {})
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/parkings")
-async def get_parkings():
-    """Endpoint dédié pour la disponibilité des parkings"""
-    try:
-        result = mcp.execute_tool("get_parking_status", {})
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

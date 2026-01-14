@@ -10,7 +10,7 @@ from datetime import datetime
 class TrafficScraper:
     """
     Scraper pour les données de trafic en temps réel de Rennes Métropole
-    Source: Opendatasoft API (données open-data officielles)
+    Source: API Opendatasoft (données open-data officielles)
     """
 
     def __init__(self):
@@ -104,7 +104,7 @@ class TrafficScraper:
             # Budget de géocodage pour éviter la lenteur (max 30 requêtes par appel)
             geocode_budget = 30
 
-            # Helper geocode + enrichissement
+            # Fonction auxiliaire pour le géocodage + enrichissement
             def _enrich(entry: Dict[str, Any], status_label: str, priority: str, can_geocode: bool) -> Dict[str, Any]:
                 lat = entry.get("lat")
                 lon = entry.get("lon")
@@ -200,7 +200,7 @@ class TrafficScraper:
         return datetime.now().strftime("%H:%M")
 
     def _reverse_geocode(self, lat: float, lon: float) -> Dict[str, str]:
-        """Reverse geocode via Nominatim (OSM) with simple cache, Rennes only"""
+        """Géocodage inverse via Nominatim (OSM) avec cache simple, Rennes uniquement"""
         key = f"{lat:.5f},{lon:.5f}"
         if key in self._geocode_cache:
             return self._geocode_cache[key]
