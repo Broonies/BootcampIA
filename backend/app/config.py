@@ -19,4 +19,4 @@ RENNES_RADIUS_KM = 15  # Rayon en km autour du centre
 
 # Filtres de recherche
 DEFAULT_FUEL_TYPE = "Gazole"
-MAX_RESULTS = 10
+MAX_RESULTS = 5

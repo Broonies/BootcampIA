@@ -2,9 +2,9 @@
 """Simulateur MCP - Orchestre la détection, l'extraction et l'exécution des outils."""
 from typing import Optional, Dict, Any
 
-from app.tool_detector import ToolDetector
-from app.param_extractor import ParamExtractor
-from app.tool_executor import ToolExecutor
+from .tool_detector import ToolDetector
+from .param_extractor import ParamExtractor
+from .tool_executor import ToolExecutor
 
 
 class MCPSimulator:
@@ -17,13 +17,13 @@ class MCPSimulator:
         self.extractor = ParamExtractor()
         self.executor = ToolExecutor()
     
-    def process_message(self, user_message: str, user_location: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    def process_message(self, user_message: str, user_location: Optional[tuple] = None) -> Dict[str, Any]:
         """
         Traite un message utilisateur : détecte l'outil, extrait les paramètres, et exécute l'outil.
         
         Args:
             user_message: Message de l'utilisateur
-            user_location: Position GPS optionnelle {"latitude": float, "longitude": float}
+            user_location: Position GPS optionnelle (latitude, longitude)
             
         Returns:
             Résultat contenant l'outil détecté, les paramètres, et le résultat
@@ -47,13 +47,8 @@ class MCPSimulator:
         params = self.extractor.extract(user_message, tool_name)
         print(f"[MCP] Paramètres extraits: {params}")
         
-        # 3. Ajout de la position GPS si nécessaire
-        if user_location and tool_name == 'estimate_drive_time':
-            params['user_location'] = user_location
-            print(f"[MCP] Position GPS ajoutée: {user_location}")
-        
-        # 4. Exécution de l'outil
-        result = self.executor.execute(tool_name, params)
+        # 3. Exécution de l'outil avec position GPS
+        result = self.executor.execute(tool_name, params, user_location)
         print(f"[MCP] Résultat: {result}")
         
         return {

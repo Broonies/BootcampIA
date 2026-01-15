@@ -17,13 +17,7 @@ class ToolDetector:
         # Mots-clés pour chaque catégorie d'outil
         self.fuel_keywords = [
             'gazole', 'essence', 'carburant', 'sp95', 'sp98', 'e10', 'e85',
-            'seation', 'prix', 'moins cher', 'pas cher', 'economique',
-        ]
-        
-        self.nearest_fuel_keywords = [
-            'station essence', 'station', 'carburant', 'essence',
-            'proche', 'proxime', 'plus proche', 'pres', 'près',
-            'a proximite', 'à proximité', 'le plus proche'
+            'station', 'prix', 'moins cher', 'pas cher', 'economique',
         ]
         
         self.traffic_keywords = [
@@ -44,12 +38,6 @@ class ToolDetector:
             'parking', 'parkings', 'stationner', 'stationnement',
             'place', 'places', 'garer', 'garage', 'park'
         ]
-        
-        self.nearest_parking_keywords = [
-            'parking', 'parkings', 'stationnement',
-            'proche', 'proxime', 'plus proche', 'pres', 'près',
-            'a proximite', 'à proximité', 'le plus proche'
-        ]
     
     def detect(self, user_message: str) -> Optional[str]:
         """
@@ -63,11 +51,6 @@ class ToolDetector:
         """
         message_lower = user_message.lower()
         message_no_accents = self._remove_accents(message_lower)
-        
-        # LOGIQUE POUR LES REQUETES STATION ESSENCE PROCHE
-        if all(any(keyword in message_no_accents for keyword in keywords) 
-               for keywords in [self.fuel_keywords, self.nearest_fuel_keywords]):
-            return "find_nearest_fuel_station"
         
         # LOGIQUE POUR LES REQUETES CARBURANT
         if any(keyword in message_no_accents for keyword in self.fuel_keywords):
