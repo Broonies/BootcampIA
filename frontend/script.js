@@ -221,7 +221,7 @@ async function sendToBackend(query) {
         // On convertit le format du Python vers le format attendu par createStationCard
         const formattedStations = data.data.map((station, index) => ({
           name: `${station.adresse}, ${station.ville}`,
-          distance: `${station.distance_km} km`,
+          distance: station.distance_km ? `${station.distance_km} km` : "Distance inconnue",
           best: index === 0,
           prices: [
             {

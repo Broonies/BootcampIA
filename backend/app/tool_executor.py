@@ -1,11 +1,11 @@
 """Exécution d'outils pour le simulateur MCP."""
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 
-from app.tools.fuel_scraper import FuelPriceScraper
-from app.tools.traffic_scraper import TrafficScraper
-from app.tools.parking_scraper import ParkingScraper
-from app.tools.drive_time_estimator import DriveTimeEstimator
-from app.rennes_locations import find_location_fuzzy, get_suggestions
+from .tools.fuel_scraper import FuelPriceScraper, calculate_distance
+from .tools.traffic_scraper import TrafficScraper
+from .tools.parking_scraper import ParkingScraper
+from .tools.drive_time_estimator import DriveTimeEstimator
+from .rennes_locations import find_location_fuzzy, get_suggestions
 
 
 class ToolExecutor:
@@ -29,22 +29,23 @@ class ToolExecutor:
             "scrape_website": self._detect_scraping,
         }
     
-    def execute(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, tool_name: str, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
         """
         Exécute un outil MCP avec les paramètres donnés.
         
         Args:
             tool_name: Nom de l'outil à exécuter
             params: Paramètres extraits du message
+            user_location: Tuple (latitude, longitude) de l'utilisateur (optionnel)
             
         Returns:
             Résultat de l'exécution de l'outil
         """
         if tool_name in self.tools:
-            return self.tools[tool_name](params)
+            return self.tools[tool_name](params, user_location)
         return {"error": f"Outil {tool_name} inconnu"}
     
-    def _search_fuel_prices(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _search_fuel_prices(self, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
         """Recherche les prix de carburant."""
         ville = params.get('ville')
         code_postal = params.get('code_postal')
@@ -58,6 +59,22 @@ class ToolExecutor:
             else:
                 return {"error": "Ville ou code postal requis"}
             
+            # 📍 Ajouter les distances si position GPS disponible
+            if user_location:
+                station_data = self.fuel_scraper.fetch_daily_prices()
+                for result in results:
+                    # Chercher les coordonnées de la station
+                    for station in station_data["stations"]:
+                        if (station["adresse"] == result["adresse"] and 
+                            station["cp"] == result["cp"]):
+                            if "latitude" in station and "longitude" in station:
+                                distance = calculate_distance(
+                                    user_location[0], user_location[1],
+                                    station["latitude"], station["longitude"]
+                                )
+                                result["distance_km"] = distance
+                            break
+            
             return {
                 "success": True,
                 "fuel_type": fuel_type,
@@ -68,7 +85,7 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
     
-    def _get_cheapest_station(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_cheapest_station(self, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
         """Trouve les stations les moins chères."""
         ville = params.get('ville')
         code_postal = params.get('code_postal')
@@ -83,6 +100,22 @@ class ToolExecutor:
             else:
                 return {"error": "Ville ou code postal requis"}
             
+            # 📍 Ajouter les distances si position GPS disponible
+            if user_location:
+                station_data = self.fuel_scraper.fetch_daily_prices()
+                for result in results:
+                    # Chercher les coordonnées de la station
+                    for station in station_data["stations"]:
+                        if (station["adresse"] == result["adresse"] and 
+                            station["cp"] == result["cp"]):
+                            if "latitude" in station and "longitude" in station:
+                                distance = calculate_distance(
+                                    user_location[0], user_location[1],
+                                    station["latitude"], station["longitude"]
+                                )
+                                result["distance_km"] = distance
+                            break
+            
             return {
                 "success": True,
                 "fuel_type": fuel_type,
@@ -92,11 +125,11 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
     
-    def _compare_fuel_prices(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _compare_fuel_prices(self, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
         """Compare les prix entre plusieurs villes."""
         return {"info": "Comparaison non implémentée"}
     
-    def _get_fuel_stats(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_fuel_stats(self, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
         """Retourne les statistiques globales."""
         try:
             stats = self.fuel_scraper.get_stats()
@@ -107,7 +140,7 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
     
-    def _estimate_drive_time(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _estimate_drive_time(self, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
         """Estime le temps de trajet en tenant compte du trafic."""
         try:
             origin_name = params.get('origin_name', 'Rennes Centre')
@@ -149,14 +182,14 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
     
-    def _get_traffic_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_traffic_status(self, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
         """Retourne l'état du trafic pour Rennes Métropole."""
         return self.traffic_scraper.get_traffic_status(params.get("street_query"))
     
-    def _get_parking_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_parking_status(self, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
         """Retourne la disponibilité des parkings à Rennes."""
         return self.parking_scraper.get_parking_status()
     
-    def _detect_scraping(self, params: Dict[str, Any]) -> bool:
+    def _detect_scraping(self, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> bool:
         """Détecte si scraping nécessaire."""
         return True

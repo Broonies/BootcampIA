@@ -4,10 +4,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import traceback
 import json
 
-from app.llm import EpitechLLMService
-from app.mcp_sim import MCPSimulator
-from app.models import ChatRequest
-from app.formatters import (
+from .llm import EpitechLLMService
+from .mcp_sim import MCPSimulator
+from .models import ChatRequest
+from .formatters import (
     format_fuel_results,
     format_traffic_results,
     format_parking_results,
@@ -151,3 +151,8 @@ async def health():
         "model": "qwen3:30b",
         "mcp_tools": list(mcp.tools.keys())
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)

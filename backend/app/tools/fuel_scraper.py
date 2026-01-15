@@ -3,11 +3,12 @@
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import json
 import os
 import zipfile
 import io
+import math
 
 # Codes postaux Rennes Métropole
 RENNES_METRO_POSTAL_CODES = [
@@ -21,6 +22,33 @@ def safe_float(value: str, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Calcule la distance en km entre deux points GPS (formule Haversine).
+    
+    Args:
+        lat1, lon1: Latitude et longitude du point 1
+        lat2, lon2: Latitude et longitude du point 2
+        
+    Returns:
+        Distance en km (arrondie à 1 décimale)
+    """
+    R = 6371  # Rayon de la Terre en km
+    
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+    
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    
+    a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    
+    distance = R * c
+    return round(distance, 1)
 
 class FuelPriceScraper:
     """
