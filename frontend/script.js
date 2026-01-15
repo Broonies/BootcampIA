@@ -125,6 +125,43 @@ function createStationCard(station) {
   return card;
 }
 
+function createParkingCard(parking) {
+  const card = document.createElement("div");
+  card.className = "station-card"; // Réutiliser le style station-card
+
+  let pricingHTML = "";
+  if (parking.prices && parking.prices.length > 0) {
+    pricingHTML = `
+      <div class="fuel-prices">
+        ${parking.prices
+          .map(
+            (p) => `
+            <div class="fuel-price">
+                <div class="fuel-type">${p.type}</div>
+                <div class="price">${p.price}</div>
+            </div>
+        `
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
+  card.innerHTML = `
+        <div class="station-header">
+            <div class="station-name">${parking.name}</div>
+            <div class="station-distance">${parking.distance}</div>
+        </div>
+        <div class="station-info">
+            <div>${parking.status}</div>
+            <div>${parking.available}/${parking.total} places</div>
+        </div>
+        ${pricingHTML}
+    `;
+
+  return card;
+}
+
 // --- MODIFICATION MAJEURE : Fonction connectée au Backend ---
 async function sendToBackend(query) {
   try {
@@ -132,49 +169,75 @@ async function sendToBackend(query) {
     // Note : On suppose que ton backend tourne sur le port 8000
     console.log("📍 userLocation avant envoi:", userLocation);
     const response = await fetch("http://127.0.0.1:8000/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message: query,
-      history: [],
-      latitude: userLocation ? userLocation.lat : null,
-      longitude: userLocation ? userLocation.lon : null
-    }),
-  });
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: query,
+        history: [],
+        latitude: userLocation ? userLocation.lat : null,
+        longitude: userLocation ? userLocation.lon : null
+      }),
+    });
+
+    console.log("✓ Fetch réussi, status:", response.status);
 
     if (!response.ok) {
-      throw new Error(`Erreur serveur: ${response.status}`);
+      const errorText = await response.text();
+      console.error("❌ Erreur serveur:", response.status, errorText);
+      throw new Error(`Erreur serveur ${response.status}: ${errorText}`);
     }
 
     const data = await response.json();
+    console.log("✓ JSON parsé, data reçue:", data);
 
     // 2. Traitement intelligent de la réponse
-    // Si le backend renvoie des données de stations (tableau non vide) dans 'data'
+    // Si le backend renvoie des données (tableau non vide) dans 'data'
     if (data.data && Array.isArray(data.data) && data.data.length > 0) {
+      console.log("📊 Données détectées, type d'élément:", typeof data.data[0]);
       
-      // On convertit le format du Python vers le format attendu par createStationCard
-      const formattedStations = data.data.map((station, index) => ({
-        name: `${station.adresse}, ${station.ville}`, // Nom de la station
-        distance: station.cp, // On affiche le CP à la place de la distance pour l'instant
-        best: index === 0,    // La première est la moins chère (tri backend)
-        prices: [
-          {
-            type: station.fuel_type, // Ou station.fuel_type si disponible dans 'data'
-            price: station.price.toFixed(3)
-          }
-        ]
-      }));
-      // On renvoie un objet type 'stations' pour que sendMessage affiche les cartes
-      return {
-        type: "stations", 
-        stations: formattedStations,
-        // On peut aussi afficher le texte de l'IA si on modifiait sendMessage, 
-        // mais ici le format attendu par ton code existant sépare stations ou texte.
-        // Pour bien faire, on pourrait afficher le texte PUIS les stations,
-        // mais restons simples pour l'instant : on renvoie les stations.
-      };
+      // Vérifier si c'est des parkings ou des stations
+      const isParking = data.data[0].available !== undefined; // Les parkings ont "available"
+      
+      if (isParking) {
+        console.log("🅿️ Détecté: Parkings");
+        // Formater les parkings
+        const formattedParkings = data.data.map((parking) => ({
+          name: parking.name,
+          distance: `${parking.distance_km} km`,
+          available: parking.available,
+          total: parking.total,
+          status: parking.status,
+          prices: parking.pricing ? Object.entries(parking.pricing).map(([duration, price]) => ({
+            type: duration,
+            price: price
+          })) : []
+        }));
+        return {
+          type: "parkings",
+          parkings: formattedParkings,
+        };
+      } else {
+        console.log("⛽ Détecté: Stations essence");
+        // On convertit le format du Python vers le format attendu par createStationCard
+        const formattedStations = data.data.map((station, index) => ({
+          name: `${station.adresse}, ${station.ville}`,
+          distance: `${station.distance_km} km`,
+          best: index === 0,
+          prices: [
+            {
+              type: station.fuel_type || "Gazole",
+              price: station.price.toFixed(3)
+            }
+          ]
+        }));
+        return {
+          type: "stations",
+          stations: formattedStations,
+        };
+      }
     }
 
+    console.log("📝 Pas de données, retournant texte simple");
     // 3. Cas par défaut : réponse textuelle simple de l'IA
     return {
       type: "text",
@@ -182,10 +245,11 @@ async function sendToBackend(query) {
     };
 
   } catch (error) {
-    console.error("Erreur API:", error);
+    console.error("❌ Erreur dans sendToBackend:", error);
+    console.error("Stack:", error.stack);
     return {
       type: "text",
-      text: "❌ Désolé, je n'arrive pas à joindre le serveur. Vérifie que le backend (main.py) est bien lancé sur le port 8000.",
+      text: "❌ Erreur: " + error.message,
     };
   }
 }
@@ -252,6 +316,20 @@ function sendMessage() {
         // Création des cartes
         res.stations.forEach((st) => {
           const card = createStationCard(st);
+          content.appendChild(card);
+        });
+        chat.appendChild(container);
+
+      } else if (res.type === "parkings") {
+        const container = createMessageElement({
+          role: "ai",
+          text: "Voici les parkings les plus proches :",
+        });
+        const content = container.querySelector(".message-content");
+        
+        // Création des cartes de parkings
+        res.parkings.forEach((parking) => {
+          const card = createParkingCard(parking);
           content.appendChild(card);
         });
         chat.appendChild(container);
