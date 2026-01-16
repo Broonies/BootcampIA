@@ -1,8 +1,9 @@
 # backend/app/tools/parking_scraper.py
 
 import requests
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
+from .fuel_scraper import calculate_distance
 
 
 class ParkingScraper:
@@ -15,7 +16,7 @@ class ParkingScraper:
         self.base_url = "https://data.rennesmetropole.fr/api/records/1.0/search/"
         self.dataset = "export-api-parking-citedia"
 
-    def get_parking_status(self) -> Dict[str, Any]:
+    def get_parking_status(self, user_location: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
         """
         Récupère les disponibilités des parkings de Rennes
         
@@ -28,7 +29,8 @@ class ParkingScraper:
                         "available": int,
                         "total": int,
                         "status": str,
-                        "location": str
+                        "location": str,
+                        "distance_km": float | None
                     }
                 ],
                 "updated": str (HH:MM),
@@ -94,6 +96,11 @@ class ParkingScraper:
                 # Géolocalisation si disponible
                 geo = fields.get("geo", [])
                 location = f"{geo[0]:.5f}, {geo[1]:.5f}" if len(geo) == 2 else ""
+                distance_km = None
+                if user_location and len(geo) == 2:
+                    distance_km = calculate_distance(
+                        user_location[0], user_location[1], geo[0], geo[1]
+                    )
                 
                 parking_data = {
                     "name": name,
@@ -101,7 +108,8 @@ class ParkingScraper:
                     "total": total,
                     "status": status,
                     "location": location,
-                    "occupancy_rate": round((total - available) / total * 100, 1) if total > 0 else 0
+                    "occupancy_rate": round((total - available) / total * 100, 1) if total > 0 else 0,
+                    "distance_km": distance_km,
                 }
                 
                 # Ajouter les tarifs seulement s'il y en a
@@ -110,8 +118,11 @@ class ParkingScraper:
                 
                 parkings.append(parking_data)
 
-            # Trier par places disponibles (décroissant)
-            parkings.sort(key=lambda x: x["available"], reverse=True)
+            # Trier par distance si GPS fourni, sinon par places disponibles
+            if user_location:
+                parkings.sort(key=lambda x: (x["distance_km"] is None, x.get("distance_km", 1e9)))
+            else:
+                parkings.sort(key=lambda x: x["available"], reverse=True)
 
             return {
                 "success": True,
