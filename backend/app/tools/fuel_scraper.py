@@ -275,26 +275,34 @@ class FuelPriceScraper:
                 s for s in stations
                 if any(s["cp"].startswith(cp) for cp in RENNES_METRO_POSTAL_CODES)
             ]
+        fuel_prices: Dict[str, List[float]] = {}
+        for station in stations:
+            for fuel_name, payload in station.get("prices", {}).items():
+                price = payload.get("price")
+                if price is None:
+                    continue
+                fuel_prices.setdefault(fuel_name, []).append(price)
 
-        prices = [
-            s["prices"]["Gazole"]["price"]
-            for s in stations
-            if "Gazole" in s["prices"]
-        ]
+        if not fuel_prices:
+            return {"error": "Aucune donnée carburant"}
 
-        if not prices:
-            return {"error": "Aucune donnée Gazole"}
+        fuels_stats: Dict[str, Dict[str, float]] = {}
+        for fuel_name, prices in fuel_prices.items():
+            if not prices:
+                continue
+            fuels_stats[fuel_name] = {
+                "count": len(prices),
+                "min": min(prices),
+                "max": max(prices),
+                "avg": round(sum(prices) / len(prices), 3),
+            }
 
         location_info = "Rennes Métropole" if self.restrict_to_rennes else "France"
         return {
             "date": data["date"],
             "location": location_info,
             "total_stations": len(stations),
-            "gazole": {
-                "min": min(prices),
-                "max": max(prices),
-                "avg": round(sum(prices) / len(prices), 3),
-            },
+            "fuels": fuels_stats,
         }
 
 

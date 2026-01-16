@@ -45,16 +45,33 @@ def format_fuel_results(mcp_result: Dict) -> str:
 
     if tool == "get_fuel_stats":
         stats = data.get("stats", {})
-        gazole = stats.get("gazole", {})
+        fuels = stats.get("fuels", {})
 
-        return (
-            f"📊 Statistiques nationales ({stats.get('date')}):\n\n"
-            f"Stations: {stats.get('total_stations')}\n"
-            f"Gazole:\n"
-            f"• Min: {gazole.get('min'):.3f} €/L\n"
-            f"• Max: {gazole.get('max'):.3f} €/L\n"
-            f"• Moyenne: {gazole.get('avg'):.3f} €/L\n"
-        )
+        if not fuels:
+            return "Aucune donnée de carburant disponible"
+
+        location = stats.get("location", "nationale")
+        date = stats.get("date", "?")
+        total = stats.get("total_stations")
+
+        out = f"📊 Statistiques {location} ({date}):\n\n"
+        if total is not None:
+            out += f"Stations analysées: {total}\n\n"
+
+        for fuel_name, values in fuels.items():
+            if not values:
+                continue
+            out += (
+                f"{fuel_name}:\n"
+                f"• Min: {values.get('min', 0):.3f} €/L\n"
+                f"• Max: {values.get('max', 0):.3f} €/L\n"
+                f"• Moyenne: {values.get('avg', 0):.3f} €/L\n"
+            )
+            if values.get("count") is not None:
+                out += f"• Stations avec prix: {values.get('count')}\n"
+            out += "\n"
+
+        return out.strip()
 
     return "Données MCP reçues mais non formatées"
 
