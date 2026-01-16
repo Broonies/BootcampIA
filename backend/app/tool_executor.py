@@ -145,7 +145,6 @@ class ToolExecutor:
         try:
             origin_name = params.get('origin_name', 'Rennes Centre')
             destination_name = params.get('destination_name', 'Rennes')
-            user_location = params.get('user_location')
             
             print(f"[DRIVE TIME DEBUG] origin_name='{origin_name}', user_location={user_location}")
             
