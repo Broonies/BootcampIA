@@ -187,7 +187,7 @@ class ToolExecutor:
     
     def _get_parking_status(self, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
         """Retourne la disponibilité des parkings à Rennes."""
-        return self.parking_scraper.get_parking_status()
+        return self.parking_scraper.get_parking_status(user_location)
     
     def _detect_scraping(self, params: Dict[str, Any], user_location: Optional[Tuple[float, float]] = None) -> bool:
         """Détecte si scraping nécessaire."""

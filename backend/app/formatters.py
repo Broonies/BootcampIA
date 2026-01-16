@@ -147,8 +147,16 @@ def format_parking_results(mcp_result: Dict) -> str:
     for p in parkings[:10]:
         txt += f"• {p['name']}\n"
         txt += f"  {p['status']} - {p['available']}/{p['total']} places\n"
+        if p.get('distance_km') is not None:
+            txt += f"  📏 À {p['distance_km']:.1f} km\n"
         if p.get('location'):
             txt += f"  📍 {p['location']}\n"
+        pricing = p.get('pricing')
+        if pricing:
+            order = ["15min", "30min", "1h", "1h30", "2h", "3h", "4h"]
+            parts = [f"{d}: {pricing[d]}" for d in order if d in pricing]
+            if parts:
+                txt += f"  💵 Tarifs: {' | '.join(parts)}\n"
         txt += "\n"
 
     txt += f"💡 {len(parkings)} parking(s) surveillés"
